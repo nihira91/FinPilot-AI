@@ -1,0 +1,22 @@
+# ── PDF Parsing ──────────────────────────────────────────────────────────────
+pypdf>=3.0.0                     # Reads PDF files page by page, extracts raw text
+
+# ── Text Splitting ────────────────────────────────────────────────────────────
+langchain-text-splitters>=0.0.1  # Splits long text into overlapping chunks
+
+# ── Embeddings (runs locally, free) ──────────────────────────────────────────
+sentence-transformers>=2.2.0     # Downloads + runs HuggingFace embedding model locally
+
+# ── Vector Database ───────────────────────────────────────────────────────────
+chromadb>=0.4.0                  # Persistent vector DB; supports named collections natively
+
+# ── LLM via HuggingFace Inference API ────────────────────────────────────────
+huggingface_hub>=0.20.0          # Official HuggingFace Python client
+requests>=2.31.0                 # HTTP requests to HuggingFace Inference API
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0             # Loads HF_API_TOKEN from .env safely
+numpy>=1.24.0                    # Numerical arrays used internally
+
+
+google-generativeai
