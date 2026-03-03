@@ -20,30 +20,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
-load_dotenv()   # Load environment variables from .env file
+load_dotenv()
 
-# The HuggingFace model to use for text generation
-# Change this to any instruction-tuned model available on HuggingFace
 MODEL_ID = "gemini-2.5-flash"
 
 
 def call_llm(system_prompt: str, user_message: str, max_new_tokens: int = 1024) -> str:
-    """
-    Send a system prompt + user message to the HuggingFace Inference API
-    and return the model's text response.
-
-    Args:
-        system_prompt   : the agent's persona and output format instructions
-        user_message    : context + query built by build_user_message()
-        max_new_tokens  : maximum tokens the model can generate in its reply
-
-    Returns:
-        The model's response as a plain string.
-        Returns an error message string if the API call fails (never crashes).
-    """
     token = os.getenv("GEMINI_API_KEY")
 
     if not token:
@@ -53,21 +39,17 @@ def call_llm(system_prompt: str, user_message: str, max_new_tokens: int = 1024) 
             "and add it to your .env file as: GEMINI_API_KEY=your_key"
         )
 
-    genai.configure(api_key=token)
-    model = genai.GenerativeModel(MODEL_ID)
-
-    # ── Format the prompt in Mistral's [INST] chat template ───────────────────
-    # Mistral-Instruct uses [INST] ... [/INST] to mark user turns.
-    # We prepend the system prompt inside the first user turn.
-
     try:
+        client = genai.Client(api_key=token)
         full_prompt = f"{system_prompt}\n\n{user_message}"
-        response = model.generate_content(
-            full_prompt,
-            generation_config={
-                "temperature": 0.3,
-                "max_output_tokens": max_new_tokens,
-            }
+        
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=max_new_tokens,
+            )
         )
         return response.text.strip()
 
