@@ -1,134 +1,224 @@
-# orchestrator/orchestrator_agent.py
-from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_huggingface import HuggingFaceEmbeddings
+import os
 from typing import TypedDict, Literal
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from langgraph.graph import StateGraph, END
+from rag.pipeline import rag_query, format_context, build_collection
+from agents.investment_strategist import run as investment_run
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash"
-)
+MODEL_ID = "gemini-2.5-flash"
 
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+def call_gemini(prompt: str) -> str:
+    token = os.getenv("GEMINI_API_KEY")
+    client = genai.Client(api_key=token)
+    response = client.models.generate_content(
+        model=MODEL_ID,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=1024,
+        )
+    )
+    return response.text.strip()
 
-# State that passes between all agents
+
+# ── Agent State ───────────────────────────────────────────
 class AgentState(TypedDict):
     query: str
     route: str
+    investment_output: str
     financial_output: str
     sales_output: str
-    investment_output: str
     cloud_output: str
     final_output: str
 
-# Orchestrator decides which agent to call
+
+# ── Orchestrator Node ─────────────────────────────────────
 def orchestrator_node(state: AgentState):
     query = state["query"]
+    print(f"\n[Orchestrator] Query received: {query}")
 
-    prompt = f"""
-    You are an orchestrator of a financial
-    AI system. Based on the query decide
-    which agents to call.
+    # Use RAG on routing_rules collection
+    chunks = rag_query("routing_rules", query, top_k=3)
+    context = format_context(chunks)
 
-    Query: {query}
+    prompt = f"""You are an orchestrator of a financial AI system.
+Based on the query and routing rules below, decide which agent to call.
 
-    Available agents:
-    - financial: for financial analysis,
-                 profit/loss, budget
-    - sales: for sales trends,
-             pattern detection
-    - investment: for strategy documents,
-                  consultant reports
-    - cloud: for infrastructure,
-             AWS/GCP recommendations
-    - all: if query needs all agents
+ROUTING RULES CONTEXT:
+{context}
 
-    Respond with only one word:
-    financial, sales, investment, cloud,
-    or all
-    """
+QUERY: {query}
 
-    response = llm.invoke(prompt)
-    route = response.content.strip().lower()
-    print(f"\nRouting query to: {route}")
+Available agents:
+- financial: for profit/loss, budget, stock analysis
+- sales: for sales trends, patterns, growth
+- investment: for strategy documents, consultant reports
+- cloud: for infrastructure, AWS/GCP recommendations
+- all: if query needs multiple agents
+
+Respond with ONLY one word: financial, sales, investment, cloud, or all"""
+
+    route = call_gemini(prompt).lower().strip()
+    
+    # Clean route in case model adds extra text
+    for option in ["financial", "sales", "investment", "cloud", "all"]:
+        if option in route:
+            route = option
+            break
+    
+    print(f"[Orchestrator] Routing to: {route}")
     return {"route": route}
 
-# Router function
+
+# ── Router Function ───────────────────────────────────────
 def route_query(state: AgentState) -> Literal[
-    "financial", "sales",
-    "investment", "cloud", "all_agents"
+    "financial", "sales", "investment", "cloud", "all_agents"
 ]:
     route = state["route"]
     if route == "all":
         return "all_agents"
+    if route not in ["financial", "sales", "investment", "cloud"]:
+        return "investment"  # default fallback
     return route
 
-# Placeholder nodes
-# Replace with real agents later
+
+# ── Agent Nodes ───────────────────────────────────────────
+def investment_node(state: AgentState):
+    print("[Investment Agent] Running...")
+    result = investment_run(state["query"])
+    return {"investment_output": result["response"]}
+
+
 def financial_node(state: AgentState):
-    print("Financial Agent running...")
-    return {
-        "financial_output":
-        "Financial analysis placeholder"
-    }
+    print("[Financial Agent] Running...")
+    chunks = rag_query("financial_reports", state["query"], top_k=5)
+    context = format_context(chunks)
+    prompt = f"""You are a Financial Analyst AI.
+Analyse the following context and answer the query.
+
+CONTEXT:
+{context}
+
+QUERY: {state["query"]}
+
+Respond with:
+## Financial Summary
+## Key Metrics
+## Budget Forecast
+## Recommendations"""
+    response = call_gemini(prompt)
+    return {"financial_output": response}
+
 
 def sales_node(state: AgentState):
-    print("Sales Agent running...")
-    return {
-        "sales_output":
-        "Sales analysis placeholder"
-    }
+    print("[Sales Agent] Running...")
+    chunks = rag_query("sales_reports", state["query"], top_k=5)
+    context = format_context(chunks)
+    prompt = f"""You are a Sales Data Scientist AI.
+Analyse the following context and answer the query.
 
-def investment_node(state: AgentState):
-    print("Investment Agent running...")
-    return {
-        "investment_output":
-        "Investment analysis placeholder"
-    }
+CONTEXT:
+{context}
+
+QUERY: {state["query"]}
+
+Respond with:
+## Sales Summary
+## Trend Analysis
+## Data-Driven Recommendations"""
+    response = call_gemini(prompt)
+    return {"sales_output": response}
+
 
 def cloud_node(state: AgentState):
-    print("Cloud Agent running...")
-    return {
-        "cloud_output":
-        "Cloud analysis placeholder"
-    }
+    print("[Cloud Agent] Running...")
+    chunks = rag_query("cloud_docs", state["query"], top_k=5)
+    context = format_context(chunks)
+    prompt = f"""You are a Cloud Architect AI.
+Analyse the following context and answer the query.
+
+CONTEXT:
+{context}
+
+QUERY: {state["query"]}
+
+Respond with:
+## Infrastructure Summary
+## Architecture Recommendations
+## Cost Optimisation
+## Scalability Roadmap"""
+    response = call_gemini(prompt)
+    return {"cloud_output": response}
+
 
 def all_agents_node(state: AgentState):
-    print("All Agents running...")
+    print("[All Agents] Running all agents...")
+    
+    # Investment
+    inv_result = investment_run(state["query"])
+    
+    # Financial
+    fin_chunks = rag_query("financial_reports", state["query"], top_k=3)
+    fin_context = format_context(fin_chunks)
+    fin_response = call_gemini(f"You are a Financial Analyst AI.\n\nCONTEXT:\n{fin_context}\n\nQUERY: {state['query']}\n\nProvide financial analysis.")
+    
+    # Sales
+    sales_chunks = rag_query("sales_reports", state["query"], top_k=3)
+    sales_context = format_context(sales_chunks)
+    sales_response = call_gemini(f"You are a Sales Data Scientist AI.\n\nCONTEXT:\n{sales_context}\n\nQUERY: {state['query']}\n\nProvide sales analysis.")
+    
+    # Cloud
+    cloud_chunks = rag_query("cloud_docs", state["query"], top_k=3)
+    cloud_context = format_context(cloud_chunks)
+    cloud_response = call_gemini(f"You are a Cloud Architect AI.\n\nCONTEXT:\n{cloud_context}\n\nQUERY: {state['query']}\n\nProvide cloud recommendations.")
+    
     return {
-        "financial_output": "Financial placeholder",
-        "sales_output": "Sales placeholder",
-        "investment_output": "Investment placeholder",
-        "cloud_output": "Cloud placeholder"
+        "investment_output": inv_result["response"],
+        "financial_output": fin_response,
+        "sales_output": sales_response,
+        "cloud_output": cloud_response,
     }
 
-# Aggregate all results into final output
+
+# ── Aggregator Node ───────────────────────────────────────
 def aggregator_node(state: AgentState):
-    print("Aggregating results...")
-    final = f"""
-=== FINANCIAL ANALYSIS ===
-{state.get('financial_output', 'N/A')}
+    print("[Aggregator] Combining results...")
+    
+    parts = []
+    if state.get("financial_output"):
+        parts.append(f"=== FINANCIAL ANALYSIS ===\n{state['financial_output']}")
+    if state.get("sales_output"):
+        parts.append(f"=== SALES ANALYSIS ===\n{state['sales_output']}")
+    if state.get("investment_output"):
+        parts.append(f"=== INVESTMENT STRATEGY ===\n{state['investment_output']}")
+    if state.get("cloud_output"):
+        parts.append(f"=== CLOUD RECOMMENDATION ===\n{state['cloud_output']}")
 
-=== SALES ANALYSIS ===
-{state.get('sales_output', 'N/A')}
+    combined = "\n\n".join(parts)
 
-=== INVESTMENT STRATEGY ===
-{state.get('investment_output', 'N/A')}
+    # Final summary using Gemini
+    summary_prompt = f"""You are a Financial Intelligence Aggregator.
+Combine these agent outputs into one executive summary with key action points.
 
-=== CLOUD RECOMMENDATION ===
-{state.get('cloud_output', 'N/A')}
-    """
+{combined}
+
+Provide:
+## Executive Summary
+## Key Action Points
+## Next Steps"""
+
+    final = call_gemini(summary_prompt)
     return {"final_output": final}
 
-# Build the complete graph
+
+# ── Build Graph ───────────────────────────────────────────
 def build_graph():
     graph = StateGraph(AgentState)
 
-    # Add all nodes
     graph.add_node("orchestrator", orchestrator_node)
     graph.add_node("financial", financial_node)
     graph.add_node("sales", sales_node)
@@ -137,10 +227,8 @@ def build_graph():
     graph.add_node("all_agents", all_agents_node)
     graph.add_node("aggregator", aggregator_node)
 
-    # Entry point
     graph.set_entry_point("orchestrator")
 
-    # Conditional routing from orchestrator
     graph.add_conditional_edges(
         "orchestrator",
         route_query,
@@ -153,7 +241,6 @@ def build_graph():
         }
     )
 
-    # All agents connect to aggregator
     graph.add_edge("financial", "aggregator")
     graph.add_edge("sales", "aggregator")
     graph.add_edge("investment", "aggregator")
