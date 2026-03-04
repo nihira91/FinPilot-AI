@@ -1,0 +1,6 @@
+Analyze the following financial metrics and provide a concise interpretation, major risk areas, and 3 prioritized recommendations for improving profitability.
+
+Metrics:
+{metrics}
+
+Respond in clear, numbered bullets.
