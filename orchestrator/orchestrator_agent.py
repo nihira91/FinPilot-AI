@@ -6,6 +6,8 @@ from google.genai import types
 from langgraph.graph import StateGraph, END
 from rag.pipeline import rag_query, format_context, build_collection
 from agents.investment_strategist import run as investment_run
+from agents.financial_agent import run as financial_run
+from agents.sales_agent import run as sales_run
 
 load_dotenv()
 
@@ -95,43 +97,14 @@ def investment_node(state: AgentState):
 
 def financial_node(state: AgentState):
     print("[Financial Agent] Running...")
-    chunks = rag_query("financial_reports", state["query"], top_k=5)
-    context = format_context(chunks)
-    prompt = f"""You are a Financial Analyst AI.
-Analyse the following context and answer the query.
-
-CONTEXT:
-{context}
-
-QUERY: {state["query"]}
-
-Respond with:
-## Financial Summary
-## Key Metrics
-## Budget Forecast
-## Recommendations"""
-    response = call_gemini(prompt)
-    return {"financial_output": response}
+    result = financial_run(state["query"])
+    return {"financial_output": result["response"]}
 
 
 def sales_node(state: AgentState):
     print("[Sales Agent] Running...")
-    chunks = rag_query("sales_reports", state["query"], top_k=5)
-    context = format_context(chunks)
-    prompt = f"""You are a Sales Data Scientist AI.
-Analyse the following context and answer the query.
-
-CONTEXT:
-{context}
-
-QUERY: {state["query"]}
-
-Respond with:
-## Sales Summary
-## Trend Analysis
-## Data-Driven Recommendations"""
-    response = call_gemini(prompt)
-    return {"sales_output": response}
+    result = sales_run(state["query"])
+    return {"sales_output": result["response"]}
 
 
 def cloud_node(state: AgentState):
@@ -249,3 +222,5 @@ def build_graph():
     graph.add_edge("aggregator", END)
 
     return graph.compile()
+
+streamlit_app.py
