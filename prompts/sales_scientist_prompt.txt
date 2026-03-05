@@ -1,0 +1,6 @@
+Given the sales analysis metrics, provide a short interpretation of trends, potential drivers, and 3 suggested experiments to validate growth hypotheses.
+
+Metrics:
+{metrics}
+
+Keep recommendations actionable and measurable.
