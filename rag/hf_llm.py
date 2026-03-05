@@ -29,7 +29,7 @@ load_dotenv()
 MODEL_ID = "gemini-2.5-flash"
 
 
-def call_llm(system_prompt: str, user_message: str, max_new_tokens: int = 1024) -> str:
+def call_llm(system_prompt: str, user_message: str, max_new_tokens: int = 8192) -> str:
     token = os.getenv("GEMINI_API_KEY")
 
     if not token:
