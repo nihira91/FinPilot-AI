@@ -50,13 +50,13 @@ User Query
 
 ## 🤖 AI Agents
 
-| Agent | Responsibility | RAG Collection | Member |
-|-------|---------------|----------------|--------|
-| **Orchestrator** | Query routing, task decomposition, result aggregation | `routing_rules` | Member 1 |
-| **Financial Analyst** | P&L analysis, budget forecasting, cost analysis | `financial_reports` | Member 2 |
-| **Sales Data Scientist** | Trend detection, growth prediction, pattern analysis | `sales_reports` | Member 2 |
-| **Investment Strategist** | Strategic insights from consultant reports | `investment_reports` | Member 3 |
-| **Cloud Architect** | Infrastructure recommendations, cost optimization | `cloud_docs` | Member 4 |
+| Agent | Responsibility | RAG Collection | 
+|-------|---------------|----------------|
+| **Orchestrator** | Query routing, task decomposition, result aggregation | `routing_rules` | 
+| **Financial Analyst** | P&L analysis, budget forecasting, cost analysis | `financial_reports` | 
+| **Sales Data Scientist** | Trend detection, growth prediction, pattern analysis | `sales_reports` |
+| **Investment Strategist** | Strategic insights from consultant reports | `investment_reports` | 
+| **Cloud Architect** | Infrastructure recommendations, cost optimization | `cloud_docs` | 
 
 ---
 
