@@ -233,21 +233,8 @@ def sales_node(state: AgentState):
 
 def cloud_node(state: AgentState):
     print("[Cloud Agent] Running...")
-    chunks  = rag_query("cloud_docs", state["query"], top_k=5)
-    context = format_context(chunks)
-    prompt  = f"""You are a Cloud Architect AI.
-CONTEXT:
-{context}
-
-QUERY: {state["query"]}
-
-Respond with:
-## Infrastructure Summary
-## Architecture Recommendations
-## Cost Optimisation
-## Scalability Roadmap"""
-    response = call_gemini(prompt)
-    return {"cloud_output": response}
+    result = cloud_run(state["query"])
+    return {"cloud_output": result["response"]}
 
 
 # ── Multi Agent Node (only required agents) ───────────────
