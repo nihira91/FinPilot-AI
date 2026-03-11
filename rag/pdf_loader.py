@@ -1,17 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# pdf_loader.py
-#
-# PURPOSE : Open PDF files and extract all their text as plain strings.
-#
-# WHY pypdf ?
-#   It is lightweight and does exactly one job — read PDFs.
-#   No heavy dependencies, works offline, handles multi-page documents.
-#
-# WHAT IT RETURNS :
-#   A dict  { "filename.pdf" : "full text of that PDF" }
-#   We keep the filename because later we store it as metadata so the agent
-#   can tell the user which document its answer came from.
-# ─────────────────────────────────────────────────────────────────────────────
+# Open PDF files and extract all their text as plain strings.
 
 import os
 from pypdf import PdfReader   # PdfReader opens a PDF and gives a list of Page objects
@@ -26,7 +13,6 @@ def load_pdf(file_path: str) -> str:
 
     Returns:
         One big string containing the text of every page.
-        Pages are joined with a newline so paragraphs don't smash together.
     """
     reader = PdfReader(file_path)
     # reader.pages  →  list of Page objects, one per physical page in the PDF
@@ -50,10 +36,6 @@ def load_all_pdfs(folder_path: str) -> dict:
 
     Returns:
         { "report.pdf" : "full text …", "analysis.pdf" : "full text …" }
-
-    WHY a dict keyed by filename ?
-        When we chunk and store the text, we attach the filename as metadata.
-        That lets the agent later say "this answer comes from strategy_report.pdf".
     """
     documents = {}
 
