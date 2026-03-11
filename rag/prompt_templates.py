@@ -1,25 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# prompt_templates.py  —  SHARED PROMPT TEMPLATES FOR ALL AGENTS
-#
-# PURPOSE : Central file defining how each agent is described to the LLM
-#           and how context + queries are formatted in every prompt.
-#
-# WHY CENTRALISE PROMPTS ?
-#   • Consistent output format across all agents → easier for Orchestrator to parse.
-#   • One place to improve prompts for the whole team.
-#   • Teammates import their template from here instead of writing their own.
-#
-# HOW TEAMMATES USE THIS FILE:
-#   from rag.prompt_templates import AGENT_SYSTEM_PROMPTS, build_user_message
-#
-#   system_prompt = AGENT_SYSTEM_PROMPTS["financial_analyst"]
-#   user_message  = build_user_message(context_text, query)
-# ─────────────────────────────────────────────────────────────────────────────
 
-
-# ── System Prompts — one per agent ────────────────────────────────────────────
-# Each system prompt defines the agent's role and enforces a structured
-# output format so the Orchestrator can reliably parse every agent's response.
 
 AGENT_SYSTEM_PROMPTS = {
 
