@@ -118,10 +118,6 @@ def build_user_message(context: str, query: str) -> str:
     """
     Build the user-turn message for any agent's LLM call.
 
-    This standard format is used by ALL agents.
-    The context (retrieved chunks) is injected first so the LLM reads it
-    before seeing the question — this is the standard RAG prompt pattern.
-
     Args:
         context : formatted string from rag.pipeline.format_context()
         query   : the question or task passed to the agent
@@ -131,11 +127,10 @@ def build_user_message(context: str, query: str) -> str:
     """
     return f"""Please analyse the following documents and answer the query below.
 
-=== RETRIEVED CONTEXT FROM KNOWLEDGE BASE ===
+RETRIEVED CONTEXT FROM KNOWLEDGE BASE
 {context}
-=============================================
 
-=== QUERY ===
+QUERY
 {query}
 
 Provide a thorough, structured analysis based ONLY on the context above.
@@ -144,13 +139,7 @@ If the context does not contain enough information, state that clearly."""
 
 def build_comparison_prompt(query: str) -> str:
     """
-    Prompt for the Single-LLM baseline (used in evaluation / Step 9).
-
-    This is the SAME query but WITHOUT any retrieved context — the LLM
-    answers purely from its pre-trained knowledge.
-
-    Comparing this output against the RAG agent output shows how much
-    grounding on real documents improves the answer quality.
+    Prompt for the Single-LLM baseline 
 
     Args:
         query : the original user question
