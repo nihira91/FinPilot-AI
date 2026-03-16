@@ -1,13 +1,12 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# financial_agent.py — Financial Analyst Agent
-#
-# PURPOSE : Analyse financial data using Pandas and RAG pipeline,
-#           then interpret results using Gemini LLM.
-#
-# HOW ORCHESTRATOR USES THIS:
+
+
+#  Analyse financial data using Pandas and RAG pipeline,
+#  then interpret results using Gemini LLM.
+
+
 #   from agents.financial_agent import run
 #   result = run("What is our Q3 profit performance?")
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 import os
 import pandas as pd
@@ -76,11 +75,11 @@ def run(query: str, df: pd.DataFrame = None) -> dict:
     """
     print(f"\n[Financial Agent] Query received: {query}")
 
-    # Step 1: RAG retrieval from financial_reports collection
+    # RAG retrieval from financial_reports collection
     chunks  = rag_query("financial_reports", query, top_k=5)
     context = format_context(chunks)
 
-    # Step 2: Pandas analysis on sample/real data
+    # Pandas analysis on sample/real data
     if df is None:
         df = pd.DataFrame([{
             "revenue":  50000,
@@ -91,7 +90,7 @@ def run(query: str, df: pd.DataFrame = None) -> dict:
     metrics      = compute_metrics(df)
     metrics_text = "\n".join([f"{k}: {v}" for k, v in metrics.items()])
 
-    # Step 3: LLM interprets RAG context + metrics
+    # LLM interprets RAG context + metrics
     prompt = f"""You are a Financial Analyst AI agent in a
 multi-agent financial intelligence system.
 
