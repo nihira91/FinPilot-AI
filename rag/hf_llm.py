@@ -1,23 +1,6 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# hf_llm.py  —  HuggingFace Inference API Client
-#
-# PURPOSE : Send a prompt to a HuggingFace-hosted LLM and return the response.
-#
-# WHY HuggingFace INSTEAD OF OpenAI ?
-#   • Free tier available with HF_API_TOKEN (no credit card needed for many models).
-#   • Many open-weight models: Mistral, Zephyr, Falcon, Llama, etc.
-#   • Same Python API for all of them.
-#
-# MODEL WE USE : "mistralai/Mistral-7B-Instruct-v0.2"
-#   • Strong instruction-following capability.
-#   • Free on HuggingFace Inference API (rate-limited but fine for a project).
-#   • You can swap MODEL_ID for any HF-hosted chat model below.
-#
-# HOW TO GET A TOKEN :
-#   1. Go to https://huggingface.co/settings/tokens
-#   2. Create a "Read" token (free).
-#   3. Put it in your .env file as:  HF_API_TOKEN=hf_xxxxx
-# ─────────────────────────────────────────────────────────────────────────────
+
+# Send a prompt to a HuggingFace-hosted LLM and return the response.
+
 
 import os
 from google import genai
