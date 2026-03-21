@@ -1,13 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# sales_agent.py — Sales & Data Scientist Agent
-#
-# PURPOSE : Analyse sales trends using Pandas/NumPy and RAG pipeline,
-#           then interpret results using Gemini LLM.
-#
-# HOW ORCHESTRATOR USES THIS:
-#   from agents.sales_agent import run
-#   result = run("What are our sales trends?")
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 import os
 import pandas as pd
@@ -98,11 +89,11 @@ def run(query: str, df: pd.DataFrame = None) -> dict:
     """
     print(f"\n[Sales Agent] Query received: {query}")
 
-    # Step 1: RAG retrieval from sales_reports collection
+    #  RAG retrieval from sales_reports collection
     chunks  = rag_query("sales_reports", query, top_k=5)
     context = format_context(chunks)
 
-    # Step 2: Pandas trend analysis on sample/real data
+    # Pandas trend analysis on sample/real data
     if df is None:
         df = pd.DataFrame({
             "sales": [400, 450, 500, 600, 700]
@@ -111,7 +102,7 @@ def run(query: str, df: pd.DataFrame = None) -> dict:
     trends      = compute_trends(df)
     trends_text = "\n".join([f"{k}: {v}" for k, v in trends.items()])
 
-    # Step 3: LLM interprets RAG context + trends
+    #  LLM interprets RAG context + trends
     prompt = f"""You are a Sales Data Scientist AI agent in a
 multi-agent financial intelligence system.
 
