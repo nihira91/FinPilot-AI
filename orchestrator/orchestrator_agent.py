@@ -29,10 +29,17 @@ def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
 
 
 # ── Agent State ───────────────────────────────────────────
-class AgentState(TypedDict):
+from typing import Optional
+import pandas as pd
+
+class AgentState(TypedDict, total=False):
     query: str
     route: str
     routes: list
+    financial_csv: Optional[pd.DataFrame]
+    sales_csv: Optional[pd.DataFrame]
+    financial_column_mapping: Optional[dict]
+    sales_column_mapping: Optional[dict]
     investment_output: str
     financial_output: str
     sales_output: str
@@ -43,128 +50,31 @@ class AgentState(TypedDict):
 # ── Orchestrator Node ─────────────────────────────────────
 def orchestrator_node(state: AgentState):
     query = state["query"]
+    
+    # ── Ensure query is valid string ──
+    if query is None:
+        raise ValueError("Query is None - should not reach here")
+    query = str(query).strip()
+    
+    if not query:
+        raise ValueError("Query is empty - should not reach here")
+    
     print(f"\n[Orchestrator] Query received: {query}")
 
-    chunks  = rag_query("routing_rules", query, top_k=3)
+    chunks  = rag_query("routing_rules", query, top_k=5)
     context = format_context(chunks)
 
     prompt = f"""You are an orchestrator of a financial AI system.
-Based on the query, decide which agents are needed.
+Based on the routing rules and the query, decide which agents are needed.
 
-ROUTING RULES CONTEXT:
+ROUTING RULES AND EXAMPLES:
 {context}
 
 QUERY: {query}
 
-Available agents:
-- financial: revenue, profit, budget, expenses, P&L, cost, margins,
-             quarterly performance, profitability, financial data,
-             financial summary, cost anomalies, marketing spend
-             
-- sales: sales trends, sales growth, sales patterns, sales predictions,
-         region sales, seasonal sales, product performance, sales anomalies,
-         sales strategies, factors influencing sales, historical sales data
-         
-- investment: investment strategy, portfolio, consultant reports,
-              strategy documents, expansion strategy, growth strategy,
-              market opportunities, competitive advantages, risks,
-              strategic recommendations, 3 year plan, capital deployment,
-              business strategy, future plans, market expansion
-              
-- cloud: AWS, GCP, cloud architecture, infrastructure, deployment,
-         scalability, SaaS, DevOps, high availability, cloud costs,
-         server, AI workloads, traffic handling, cloud services
-
-ROUTING RULES:
-- "quarterly performance" / "profit" / "revenue" / "budget" / 
-  "expenses" / "cost" / "P&L" / "profitability" / "financial data"
-  → financial
-
-- "sales trend" / "sales growth" / "region sales" / "seasonal" /
-  "product performance" / "sales pattern" / "sales prediction"
-  → sales
-
-- "consultant reports" / "strategy documents" / "expansion strategy" /
-  "growth strategy" / "investment opportunities" / "risks" /
-  "strategic recommendations" / "competitive advantages" /
-  "markets for expansion" / "3 years" / "business strategy"
-  → investment
-
-- "cloud" / "AWS" / "GCP" / "infrastructure" / "scalable" /
-  "deployment" / "SaaS" / "high availability" / "traffic"
-  → cloud
-
-- If query mentions BOTH financial AND investment topics
-  → financial,investment
-
-- If query mentions BOTH sales AND financial topics
-  → financial,sales
-
-- If query mentions BOTH sales AND investment topics
-  → sales,investment
-
-- If query mentions financial AND strategy/expansion
-  → financial,investment
-
-- If query mentions sales AND infrastructure/scaling
-  → sales,cloud
-
-- If query mentions company performance broadly (3+ domains)
-  → financial,sales,investment
-
-- If query mentions complete business intelligence
-  → financial,sales,investment,cloud
-
-EXAMPLES:
-"Analyze the company's quarterly financial performance" → financial
-"What is the profit trend over the last four quarters" → financial
-"Identify which quarter had the highest expenses" → financial
-"Suggest ways to improve profitability based on financial data" → financial
-"Predict next quarter revenue based on previous trends" → financial
-"What percentage of revenue is being spent on marketing" → financial
-"Identify cost anomalies in the financial data" → financial
-"Provide a financial summary for the last year" → financial
-
-"Analyze the sales growth trend over the past year" → sales
-"Which region generated the highest sales" → sales
-"Identify seasonal sales patterns in the dataset" → sales
-"Predict future sales based on historical data" → sales
-"Detect anomalies in the sales data" → sales
-"Which product category is performing best" → sales
-"Suggest strategies to increase sales in low performing regions" → sales
-"Identify factors influencing sales growth" → sales
-
-"Summarize the key insights from the consultant reports" → investment
-"Suggest an expansion strategy based on the strategy documents" → investment
-"Identify potential investment opportunities mentioned in the reports" → investment
-"What risks are highlighted in the consultant analysis" → investment
-"What markets are recommended for expansion" → investment
-"Summarize growth strategies discussed in the reports" → investment
-"Identify competitive advantages mentioned in the documents" → investment
-"Provide strategic recommendations for the next 3 years" → investment
-
-"Recommend a scalable cloud architecture for 1 million users" → cloud
-"Suggest AWS services suitable for a data analytics platform" → cloud
-"Provide a cost optimized cloud deployment strategy" → cloud
-"Design a scalable infrastructure for a growing SaaS application" → cloud
-"What cloud services should be used for high availability" → cloud
-"Suggest a deployment architecture for AI workloads" → cloud
-"Recommend ways to reduce cloud costs" → cloud
-"Design an architecture for handling high traffic during peak sales" → cloud
-
-"Analyze our financial performance and suggest an expansion strategy" → financial,investment
-"Based on sales trends and financial data recommend a growth plan" → financial,sales,investment
-"Evaluate company performance and suggest infrastructure scaling" → financial,sales,cloud
-"Analyze quarterly sales and recommend investment opportunities" → sales,investment
-"Provide a complete business intelligence report for the company" → financial,sales,investment,cloud
-"Identify growth opportunities based on financial and strategy documents" → financial,investment
-"Suggest a business expansion strategy supported by financial analysis" → financial,investment
-"Analyze company data and recommend infrastructure improvements" → financial,sales,cloud
-
 Respond with ONLY agent names separated by comma. Nothing else.
 Example: financial
-Example: financial,investment
-Example: financial,sales,investment"""
+Example: financial,investment"""
     response = call_gemini(prompt, max_tokens=100).lower().strip()
 
     valid  = ["financial", "sales", "investment", "cloud"]
@@ -221,13 +131,17 @@ def investment_node(state: AgentState):
 
 def financial_node(state: AgentState):
     print("[Financial Agent] Running...")
-    result = financial_run(state["query"])
+    csv_data = state.get("financial_csv")
+    column_mapping = state.get("financial_column_mapping")
+    result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
     return {"financial_output": result["response"]}
 
 
 def sales_node(state: AgentState):
     print("[Sales Agent] Running...")
-    result = sales_run(state["query"])
+    csv_data = state.get("sales_csv")
+    column_mapping = state.get("sales_column_mapping")
+    result = sales_run(state["query"], df=csv_data, column_mapping=column_mapping)
     return {"sales_output": result["response"]}
 
 
@@ -246,12 +160,16 @@ def multi_agent_node(state: AgentState):
 
     if "financial" in routes:
         print("[Financial Agent] Running...")
-        result = financial_run(state["query"])
+        csv_data = state.get("financial_csv")
+        column_mapping = state.get("financial_column_mapping")
+        result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
         updates["financial_output"] = result["response"]
 
     if "sales" in routes:
         print("[Sales Agent] Running...")
-        result = sales_run(state["query"])
+        csv_data = state.get("sales_csv")
+        column_mapping = state.get("sales_column_mapping")
+        result = sales_run(state["query"], df=csv_data, column_mapping=column_mapping)
         updates["sales_output"] = result["response"]
 
     if "investment" in routes:

@@ -1,241 +1,4 @@
-# # streamlit_app.py
-# import streamlit as st
-# import os
-# import sys
-# import time
-# from pathlib import Path
 
-# sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
-# from dotenv import load_dotenv
-# from rag.pipeline import build_collection, COLLECTIONS
-# from orchestrator.orchestrator_agent import build_graph
-
-# load_dotenv()
-
-# # ── Page Config ───────────────────────────────────────────
-# st.set_page_config(
-#     page_title="FinPilot AI",
-#     page_icon="💹",
-#     layout="wide"
-# )
-
-# # ── Title ─────────────────────────────────────────────────
-# st.title("💹 FinPilot AI")
-# st.caption("Multi-Agent Financial Intelligence System powered by LLM + RAG")
-
-# # ── Sidebar ───────────────────────────────────────────────
-# with st.sidebar:
-#     st.header("📁 Upload Documents")
-#     st.caption("Upload PDFs for each agent")
-
-#     collection_labels = {
-#         "financial_reports":  "📊 Financial Reports",
-#         "sales_reports":      "📈 Sales Reports",
-#         "investment_reports": "💰 Investment Reports",
-#         "cloud_docs":         "☁️ Cloud Documents",
-#         "routing_rules":      "🔀 Routing Rules",
-#     }
-
-#     uploaded_any = False
-
-#     for collection, label in collection_labels.items():
-#         st.subheader(label)
-#         uploaded_files = st.file_uploader(
-#             f"Upload PDFs",
-#             type=["pdf"],
-#             accept_multiple_files=True,
-#             key=collection
-#         )
-
-#         if uploaded_files:
-#             # Save PDFs to correct docs/ folder
-#             folder = COLLECTIONS[collection]
-#             os.makedirs(folder, exist_ok=True)
-
-#             for uploaded_file in uploaded_files:
-#                 save_path = os.path.join(folder, uploaded_file.name)
-#                 with open(save_path, "wb") as f:
-#                     f.write(uploaded_file.getbuffer())
-
-#             uploaded_any = True
-
-#     if uploaded_any:
-#         if st.button("🔄 Build Knowledge Base", type="primary"):
-#             with st.spinner("Building knowledge base..."):
-#                 for collection in COLLECTIONS:
-#                     folder = COLLECTIONS[collection]
-#                     if os.path.exists(folder):
-#                         files = [f for f in os.listdir(folder) if f.endswith('.pdf')]
-#                         if files:
-#                             st.write(f"Processing {collection}...")
-#                             build_collection(collection)
-#             st.success("✅ Knowledge base ready!")
-
-#     st.divider()
-#     st.caption("Built with LangGraph + RAG + Gemini")
-
-
-# # ── Main Area ─────────────────────────────────────────────
-# tab1, tab2 = st.tabs(["💬 Ask Query", "ℹ️ System Info"])
-
-# # ── Tab 1: Query ──────────────────────────────────────────
-# with tab1:
-#     st.subheader("Ask FinPilot AI")
-
-#     # Sample queries
-#     st.caption("Sample queries:")
-#     col1, col2, col3 = st.columns(3)
-
-#     sample_query = ""
-#     with col1:
-#         if st.button("📊 Q3 Financial Analysis"):
-#             sample_query = "Analyse our Q3 financial performance"
-#     with col2:
-#         if st.button("📈 Sales Trends"):
-#             sample_query = "What are our sales trends this year?"
-#     with col3:
-#         if st.button("💰 Investment Strategy"):
-#             sample_query = "What investment strategy is recommended?"
-
-#     col4, col5 = st.columns(2)
-#     with col4:
-#         if st.button("☁️ Cloud Infrastructure"):
-#             sample_query = "Recommend cloud infrastructure for scaling"
-#     with col5:
-#         if st.button("🔍 Complete Analysis"):
-#             sample_query = "Give complete analysis of our business"
-
-#     # Query input
-#     query = st.text_area(
-#         "Enter your financial query:",
-#         value=sample_query,
-#         height=100,
-#         placeholder="e.g. Analyse our Q3 financial performance..."
-#     )
-
-#     if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
-#         if not query.strip():
-#             st.warning("Please enter a query!")
-#         else:
-#             with st.spinner("🤖 Agents working..."):
-#                 try:
-#                     # Show progress
-#                     progress = st.progress(0)
-#                     status   = st.empty()
-
-#                     status.text("🔀 Orchestrator routing query...")
-#                     progress.progress(20)
-#                     time.sleep(0.5)
-
-#                     # Run the graph
-#                     graph  = build_graph()
-#                     result = graph.invoke({"query": query})
-
-#                     progress.progress(80)
-#                     status.text("📝 Aggregating results...")
-#                     time.sleep(0.5)
-
-#                     progress.progress(100)
-#                     status.text("✅ Analysis complete!")
-#                     time.sleep(0.3)
-
-#                     # Clear progress
-#                     progress.empty()
-#                     status.empty()
-
-#                     # Show result
-#                     st.success("Analysis Complete!")
-#                     st.markdown("---")
-#                     st.markdown(result["final_output"])
-
-#                     # Show which agent was used
-#                     route = result.get("route", "unknown")
-#                     st.info(f"🤖 Routed to: **{route}** agent")
-
-#                 except Exception as e:
-#                     st.error(f"Error: {str(e)}")
-
-
-# # ── Tab 2: System Info ────────────────────────────────────
-# with tab2:
-#     st.subheader("System Architecture")
-
-#     col1, col2 = st.columns(2)
-
-#     with col1:
-#         st.markdown("""
-# ### 🤖 AI Agents
-# - **Orchestrator** — Routes queries via LangGraph
-# - **Financial Analyst** — P&L, Budget Analysis
-# - **Sales Scientist** — Trend Detection
-# - **Investment Strategist** — RAG on Reports
-# - **Cloud Architect** — Infrastructure Planning
-
-# ### 🔧 Tech Stack
-# - **LLM** — Gemini 2.5 Flash
-# - **Orchestration** — LangGraph
-# - **RAG** — ChromaDB + HuggingFace
-# - **Protocol** — MCP
-# - **Backend** — Python + FastAPI
-#         """)
-
-#     with col2:
-#         st.markdown("""
-# ### 📊 RAG Pipeline
-# - PDF Parsing → pypdf
-# - Chunking → RecursiveCharacterTextSplitter
-# - Embeddings → all-MiniLM-L6-v2
-# - Vector Store → ChromaDB
-# - Retrieval → Cosine Similarity
-
-# ### 📁 Document Collections
-# - financial_reports/
-# - sales_reports/
-# - investment_reports/
-# - cloud_docs/
-# - routing_rules/
-#         """)
-
-#     st.divider()
-
-#     # Show collection stats
-#     st.subheader("📈 Knowledge Base Status")
-
-#     try:
-#         import chromadb
-#         from chromadb.config import Settings
-        
-#         chroma_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_store")
-        
-#         if not os.path.exists(chroma_path):
-#             st.warning("chroma_store/ folder not found. Upload documents first.")
-#         else:
-#             client = chromadb.PersistentClient(
-#                 path=chroma_path,
-#                 settings=Settings(anonymized_telemetry=False)
-#             )
-#             cols = st.columns(5)
-#             collections = [
-#                 "financial_reports",
-#                 "sales_reports", 
-#                 "investment_reports",
-#                 "cloud_docs",
-#                 "routing_rules"
-#             ]
-#             for i, name in enumerate(collections):
-#                 with cols[i]:
-#                     try:
-#                         col   = client.get_collection(name)
-#                         count = col.count()
-#                         st.metric(name.replace("_", " ").title(), f"{count} chunks")
-#                     except:
-#                         st.metric(name.replace("_", " ").title(), "Empty")
-#     except Exception as e:
-#         st.error(f"ChromaDB error: {str(e)}")
-
-# streamlit_app.py
 import streamlit as st
 import os
 import sys
@@ -717,44 +480,95 @@ with st.sidebar:
         "sales_reports":      ("📈", "Sales Reports"),
         "investment_reports": ("💰", "Investment Reports"),
         "cloud_docs":         ("☁️", "Cloud Documents"),
-        "routing_rules":      ("🔀", "Routing Rules"),
     }
 
     uploaded_any = False
+    import pandas as pd
 
     for collection, (icon, label) in collection_labels.items():
         with st.expander(f"{icon} {label}"):
+            # Financial & Sales allow both PDF and CSV
+            if collection in ["financial_reports", "sales_reports"]:
+                file_types = ["pdf", "csv"]
+                accept_label = "Drop files here (PDF or CSV)"
+            else:
+                file_types = ["pdf"]
+                accept_label = "Drop PDF files here"
+            
             uploaded_files = st.file_uploader(
-                "Drop PDF files here",
-                type=["pdf"],
+                accept_label,
+                type=file_types,
                 accept_multiple_files=True,
                 key=collection,
                 label_visibility="collapsed"
             )
+            
             if uploaded_files:
                 folder = COLLECTIONS[collection]
                 os.makedirs(folder, exist_ok=True)
+                
                 for uploaded_file in uploaded_files:
-                    save_path = os.path.join(folder, uploaded_file.name)
-                    with open(save_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                st.caption(f"✓ {len(uploaded_files)} file(s) saved")
+                    # Handle CSV files
+                    if uploaded_file.name.endswith(".csv"):
+                        try:
+                            df = pd.read_csv(uploaded_file)
+                            if collection == "financial_reports":
+                                st.session_state.financial_csv = df
+                            elif collection == "sales_reports":
+                                st.session_state.sales_csv = df
+                            st.caption(f"✓ {uploaded_file.name}: {df.shape[0]} rows × {df.shape[1]} columns")
+                        except Exception as e:
+                            st.error(f"Error reading {uploaded_file.name}: {str(e)}")
+                    else:
+                        # Handle PDF files
+                        save_path = os.path.join(folder, uploaded_file.name)
+                        with open(save_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        st.caption(f"✓ {uploaded_file.name} saved")
+                
                 uploaded_any = True
-
-    st.markdown("---")
-
-    if uploaded_any:
-        if st.button("⚡ Build Knowledge Base", type="primary", use_container_width=True):
-            with st.spinner("Indexing documents..."):
-                for collection in COLLECTIONS:
-                    folder = COLLECTIONS[collection]
-                    if os.path.exists(folder):
-                        files = [f for f in os.listdir(folder) if f.endswith('.pdf')]
-                        if files:
-                            build_collection(collection)
-            st.success("Knowledge base ready!")
-    else:
-        st.button("⚡ Build Knowledge Base", type="primary", use_container_width=True, disabled=True)
+            
+            # Show CSV status if loaded
+            if collection == "financial_reports" and "financial_csv" in st.session_state:
+                df = st.session_state.financial_csv
+                st.caption(f"📋 CSV data ready ({df.shape[0]}R × {df.shape[1]}C)")
+                with st.expander("Preview Financial Data"):
+                    st.dataframe(df.head(5), use_container_width=True)
+                
+                with st.expander("Map Columns", expanded=False):
+                    col_options = ["-- Skip --"] + list(df.columns)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        fin_revenue = st.selectbox("Revenue column:", col_options, key="fin_revenue_col")
+                        fin_cogs = st.selectbox("COGS/Cost column:", col_options, key="fin_cogs_col")
+                    with c2:
+                        fin_expenses = st.selectbox("Expenses column:", col_options, key="fin_expenses_col")
+                    
+                    mapping = {}
+                    if fin_revenue != "-- Skip --":
+                        mapping["revenue"] = fin_revenue
+                    if fin_cogs != "-- Skip --":
+                        mapping["cogs"] = fin_cogs
+                    if fin_expenses != "-- Skip --":
+                        mapping["expenses"] = fin_expenses
+                    
+                    if mapping:
+                        st.session_state.financial_column_mapping = mapping
+                        st.caption(f"✓ Mapping: {mapping}")
+                    
+            elif collection == "sales_reports" and "sales_csv" in st.session_state:
+                df = st.session_state.sales_csv
+                st.caption(f"📋 CSV data ready ({df.shape[0]}R × {df.shape[1]}C)")
+                with st.expander("Preview Sales Data"):
+                    st.dataframe(df.head(5), use_container_width=True)
+                
+                with st.expander("Map Columns", expanded=False):
+                    col_options = ["-- Skip --"] + list(df.columns)
+                    sales_col = st.selectbox("Sales/Revenue column:", col_options, key="sales_col")
+                    
+                    if sales_col != "-- Skip --":
+                        st.session_state.sales_column_mapping = {"sales": sales_col}
+                        st.caption(f"✓ Mapping: sales → {sales_col}")
 
     st.markdown("---")
 
@@ -818,58 +632,72 @@ with tab1:
         if not query.strip():
             st.warning("Please enter a query to analyse.")
         else:
-            progress = st.progress(0)
-            status   = st.empty()
+            # ── Validate query has content ──
+            if not query or not str(query).strip():
+                st.warning("Please enter a query to analyze.")
+            else:
+                query = str(query).strip()  # Clean whitespace only
+                progress = st.progress(0)
+                status   = st.empty()
 
-            status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Orchestrator routing query...</p>', unsafe_allow_html=True)
-            progress.progress(15)
-            time.sleep(0.4)
+                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Orchestrator routing query...</p>', unsafe_allow_html=True)
+                progress.progress(15)
+                time.sleep(0.4)
 
-            status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Agents processing...</p>', unsafe_allow_html=True)
-            progress.progress(40)
+                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Agents processing...</p>', unsafe_allow_html=True)
+                progress.progress(40)
 
-            try:
-                graph  = build_graph()
-                result = graph.invoke({"query": query})
+                try:
+                    graph  = build_graph()
+                    input_data = {"query": query}
+                    if "financial_csv" in st.session_state:
+                        input_data["financial_csv"] = st.session_state.financial_csv
+                    if "sales_csv" in st.session_state:
+                        input_data["sales_csv"] = st.session_state.sales_csv
+                    if "financial_column_mapping" in st.session_state:
+                        input_data["financial_column_mapping"] = st.session_state.financial_column_mapping
+                    if "sales_column_mapping" in st.session_state:
+                        input_data["sales_column_mapping"] = st.session_state.sales_column_mapping
+                    result = graph.invoke(input_data)
 
-                progress.progress(85)
-                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Aggregating intelligence...</p>', unsafe_allow_html=True)
-                time.sleep(0.3)
+                    progress.progress(85)
+                    status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Aggregating intelligence...</p>', unsafe_allow_html=True)
+                    time.sleep(0.3)
 
-                progress.progress(100)
-                time.sleep(0.2)
-                progress.empty()
-                status.empty()
+                    progress.progress(100)
+                    time.sleep(0.2)
+                    progress.empty()
+                    status.empty()
 
-                # ── Result Display ──
-                st.markdown("""
-                <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
-                    <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
-                    <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTELLIGENCE REPORT</span>
-                    <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
-                </div>
-                """, unsafe_allow_html=True)
+                    # ── Result Display ──
+                    st.markdown("""
+                    <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
+                        <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
+                        <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTELLIGENCE REPORT</span>
+                        <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                st.markdown(f'<div class="result-wrapper">{result["final_output"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="result-wrapper">{result["final_output"]}</div>', unsafe_allow_html=True)
 
-                # Agent route badge
-                routes = result.get("routes", [result.get("route", "unknown")])
-                if isinstance(routes, list):
-                    agents_str = " · ".join([r.upper() for r in routes])
-                else:
-                    agents_str = str(routes).upper()
+                    # Agent route badge
+                    routes = result.get("routes", [result.get("route", "unknown")])
+                    if isinstance(routes, list):
+                        agents_str = " · ".join([r.upper() for r in routes])
+                    else:
+                        agents_str = str(routes).upper()
 
-                st.markdown(f"""
-                <div class="route-badge">
-                    <div class="route-dot"></div>
-                    ROUTED → {agents_str}
-                </div>
-                """, unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="route-badge">
+                        <div class="route-dot"></div>
+                        ROUTED → {agents_str}
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            except Exception as e:
-                progress.empty()
-                status.empty()
-                st.error(f"**Analysis Error:** {str(e)}")
+                except Exception as e:
+                    progress.empty()
+                    status.empty()
+                    st.error(f"**Analysis Error:** {str(e)}")
 
 
 # ── Tab 2: System Architecture ────────────────────────────
@@ -944,8 +772,7 @@ with tab2:
                 "financial_reports",
                 "sales_reports",
                 "investment_reports",
-                "cloud_docs",
-                "routing_rules"
+                "cloud_docs"
             ]
             for i, name in enumerate(collections):
                 with metric_cols[i]:
@@ -977,7 +804,6 @@ with tab2:
         ("📈", "sales_reports/", "Sales Agent"),
         ("💰", "investment_reports/", "Investment Strategist"),
         ("☁️", "cloud_docs/", "Cloud Architect Agent"),
-        ("🔀", "routing_rules/", "Orchestrator Agent"),
     ]
     for i, (icon, folder, agent) in enumerate(doc_collections):
         with doc_cols[i]:

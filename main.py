@@ -28,4 +28,4 @@ if __name__ == "__main__":
     build_collection("cloud_docs")
 
     # Test queries
-    run_system("Analyse our Q3 financial performance")
+    run_system("Analyze our quarterly profit trends and suggest an expansion strategy based on our financial strength")

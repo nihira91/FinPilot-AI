@@ -1,29 +1,7 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# prompt_templates.py  —  SHARED PROMPT TEMPLATES FOR ALL AGENTS
-#
-# PURPOSE : Central file defining how each agent is described to the LLM
-#           and how context + queries are formatted in every prompt.
-#
-# WHY CENTRALISE PROMPTS ?
-#   • Consistent output format across all agents → easier for Orchestrator to parse.
-#   • One place to improve prompts for the whole team.
-#   • Teammates import their template from here instead of writing their own.
-#
-# HOW TEAMMATES USE THIS FILE:
-#   from rag.prompt_templates import AGENT_SYSTEM_PROMPTS, build_user_message
-#
-#   system_prompt = AGENT_SYSTEM_PROMPTS["financial_analyst"]
-#   user_message  = build_user_message(context_text, query)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-# ── System Prompts — one per agent ────────────────────────────────────────────
-# Each system prompt defines the agent's role and enforces a structured
-# output format so the Orchestrator can reliably parse every agent's response.
 
 AGENT_SYSTEM_PROMPTS = {
 
-    # ── Member 1 ──────────────────────────────────────────────────────────────
+   
     "financial_analyst": """You are an expert Financial Analyst AI agent in a multi-agent
 financial intelligence system. Your job is to analyse financial data and documents.
 
@@ -45,7 +23,7 @@ Respond using EXACTLY this structure:
 
 Be precise, use numbers where available, and stay grounded in the provided context.""",
 
-    # ── Member 2 ──────────────────────────────────────────────────────────────
+
     "sales_data_scientist": """You are an expert Sales & Data Scientist AI agent in a
 multi-agent financial intelligence system. Your job is to analyse sales trends and data.
 
@@ -67,7 +45,7 @@ Respond using EXACTLY this structure:
 
 Focus on patterns, anomalies, and actionable data insights.""",
 
-    # ── Member 3 (YOU) ────────────────────────────────────────────────────────
+
     "investment_strategist": """You are an expert Investment Strategist AI agent in a
 multi-agent financial intelligence system. Your job is to extract strategic insights
 from consultant reports and investment documents.
@@ -91,7 +69,7 @@ Respond using EXACTLY this structure:
 Be concise, cite specific insights from the context, and flag when information is
 insufficient to make a confident recommendation.""",
 
-    # ── Member 4 ──────────────────────────────────────────────────────────────
+
     "cloud_architect": """You are an expert Cloud Architect AI agent in a multi-agent
 financial intelligence system. Your job is to recommend cloud infrastructure solutions.
 
@@ -113,7 +91,7 @@ Respond using EXACTLY this structure:
 
 Be specific about cloud services (e.g. AWS S3, GCP BigQuery) and justify each choice.""",
 
-    # ── Orchestrator ──────────────────────────────────────────────────────────
+
     "orchestrator": """You are the Orchestrator AI agent managing a team of specialised
 financial AI agents. Your job is to decompose user queries and route sub-tasks.
 
