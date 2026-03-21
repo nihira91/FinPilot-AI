@@ -483,25 +483,92 @@ with st.sidebar:
     }
 
     uploaded_any = False
+    import pandas as pd
 
     for collection, (icon, label) in collection_labels.items():
         with st.expander(f"{icon} {label}"):
+            # Financial & Sales allow both PDF and CSV
+            if collection in ["financial_reports", "sales_reports"]:
+                file_types = ["pdf", "csv"]
+                accept_label = "Drop files here (PDF or CSV)"
+            else:
+                file_types = ["pdf"]
+                accept_label = "Drop PDF files here"
+            
             uploaded_files = st.file_uploader(
-                "Drop PDF files here",
-                type=["pdf"],
+                accept_label,
+                type=file_types,
                 accept_multiple_files=True,
                 key=collection,
                 label_visibility="collapsed"
             )
+            
             if uploaded_files:
                 folder = COLLECTIONS[collection]
                 os.makedirs(folder, exist_ok=True)
+                
                 for uploaded_file in uploaded_files:
-                    save_path = os.path.join(folder, uploaded_file.name)
-                    with open(save_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                st.caption(f"✓ {len(uploaded_files)} file(s) saved")
+                    # Handle CSV files
+                    if uploaded_file.name.endswith(".csv"):
+                        try:
+                            df = pd.read_csv(uploaded_file)
+                            if collection == "financial_reports":
+                                st.session_state.financial_csv = df
+                            elif collection == "sales_reports":
+                                st.session_state.sales_csv = df
+                            st.caption(f"✓ {uploaded_file.name}: {df.shape[0]} rows × {df.shape[1]} columns")
+                        except Exception as e:
+                            st.error(f"Error reading {uploaded_file.name}: {str(e)}")
+                    else:
+                        # Handle PDF files
+                        save_path = os.path.join(folder, uploaded_file.name)
+                        with open(save_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        st.caption(f"✓ {uploaded_file.name} saved")
+                
                 uploaded_any = True
+            
+            # Show CSV status if loaded
+            if collection == "financial_reports" and "financial_csv" in st.session_state:
+                df = st.session_state.financial_csv
+                st.caption(f"📋 CSV data ready ({df.shape[0]}R × {df.shape[1]}C)")
+                with st.expander("Preview Financial Data"):
+                    st.dataframe(df.head(5), use_container_width=True)
+                
+                with st.expander("Map Columns", expanded=False):
+                    col_options = ["-- Skip --"] + list(df.columns)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        fin_revenue = st.selectbox("Revenue column:", col_options, key="fin_revenue_col")
+                        fin_cogs = st.selectbox("COGS/Cost column:", col_options, key="fin_cogs_col")
+                    with c2:
+                        fin_expenses = st.selectbox("Expenses column:", col_options, key="fin_expenses_col")
+                    
+                    mapping = {}
+                    if fin_revenue != "-- Skip --":
+                        mapping["revenue"] = fin_revenue
+                    if fin_cogs != "-- Skip --":
+                        mapping["cogs"] = fin_cogs
+                    if fin_expenses != "-- Skip --":
+                        mapping["expenses"] = fin_expenses
+                    
+                    if mapping:
+                        st.session_state.financial_column_mapping = mapping
+                        st.caption(f"✓ Mapping: {mapping}")
+                    
+            elif collection == "sales_reports" and "sales_csv" in st.session_state:
+                df = st.session_state.sales_csv
+                st.caption(f"📋 CSV data ready ({df.shape[0]}R × {df.shape[1]}C)")
+                with st.expander("Preview Sales Data"):
+                    st.dataframe(df.head(5), use_container_width=True)
+                
+                with st.expander("Map Columns", expanded=False):
+                    col_options = ["-- Skip --"] + list(df.columns)
+                    sales_col = st.selectbox("Sales/Revenue column:", col_options, key="sales_col")
+                    
+                    if sales_col != "-- Skip --":
+                        st.session_state.sales_column_mapping = {"sales": sales_col}
+                        st.caption(f"✓ Mapping: sales → {sales_col}")
 
     st.markdown("---")
 
@@ -565,58 +632,72 @@ with tab1:
         if not query.strip():
             st.warning("Please enter a query to analyse.")
         else:
-            progress = st.progress(0)
-            status   = st.empty()
+            # ── Validate query has content ──
+            if not query or not str(query).strip():
+                st.warning("Please enter a query to analyze.")
+            else:
+                query = str(query).strip()  # Clean whitespace only
+                progress = st.progress(0)
+                status   = st.empty()
 
-            status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Orchestrator routing query...</p>', unsafe_allow_html=True)
-            progress.progress(15)
-            time.sleep(0.4)
+                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Orchestrator routing query...</p>', unsafe_allow_html=True)
+                progress.progress(15)
+                time.sleep(0.4)
 
-            status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Agents processing...</p>', unsafe_allow_html=True)
-            progress.progress(40)
+                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Agents processing...</p>', unsafe_allow_html=True)
+                progress.progress(40)
 
-            try:
-                graph  = build_graph()
-                result = graph.invoke({"query": query})
+                try:
+                    graph  = build_graph()
+                    input_data = {"query": query}
+                    if "financial_csv" in st.session_state:
+                        input_data["financial_csv"] = st.session_state.financial_csv
+                    if "sales_csv" in st.session_state:
+                        input_data["sales_csv"] = st.session_state.sales_csv
+                    if "financial_column_mapping" in st.session_state:
+                        input_data["financial_column_mapping"] = st.session_state.financial_column_mapping
+                    if "sales_column_mapping" in st.session_state:
+                        input_data["sales_column_mapping"] = st.session_state.sales_column_mapping
+                    result = graph.invoke(input_data)
 
-                progress.progress(85)
-                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Aggregating intelligence...</p>', unsafe_allow_html=True)
-                time.sleep(0.3)
+                    progress.progress(85)
+                    status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Aggregating intelligence...</p>', unsafe_allow_html=True)
+                    time.sleep(0.3)
 
-                progress.progress(100)
-                time.sleep(0.2)
-                progress.empty()
-                status.empty()
+                    progress.progress(100)
+                    time.sleep(0.2)
+                    progress.empty()
+                    status.empty()
 
-                # ── Result Display ──
-                st.markdown("""
-                <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
-                    <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
-                    <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTELLIGENCE REPORT</span>
-                    <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
-                </div>
-                """, unsafe_allow_html=True)
+                    # ── Result Display ──
+                    st.markdown("""
+                    <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
+                        <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
+                        <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTELLIGENCE REPORT</span>
+                        <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                st.markdown(f'<div class="result-wrapper">{result["final_output"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="result-wrapper">{result["final_output"]}</div>', unsafe_allow_html=True)
 
-                # Agent route badge
-                routes = result.get("routes", [result.get("route", "unknown")])
-                if isinstance(routes, list):
-                    agents_str = " · ".join([r.upper() for r in routes])
-                else:
-                    agents_str = str(routes).upper()
+                    # Agent route badge
+                    routes = result.get("routes", [result.get("route", "unknown")])
+                    if isinstance(routes, list):
+                        agents_str = " · ".join([r.upper() for r in routes])
+                    else:
+                        agents_str = str(routes).upper()
 
-                st.markdown(f"""
-                <div class="route-badge">
-                    <div class="route-dot"></div>
-                    ROUTED → {agents_str}
-                </div>
-                """, unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="route-badge">
+                        <div class="route-dot"></div>
+                        ROUTED → {agents_str}
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            except Exception as e:
-                progress.empty()
-                status.empty()
-                st.error(f"**Analysis Error:** {str(e)}")
+                except Exception as e:
+                    progress.empty()
+                    status.empty()
+                    st.error(f"**Analysis Error:** {str(e)}")
 
 
 # ── Tab 2: System Architecture ────────────────────────────

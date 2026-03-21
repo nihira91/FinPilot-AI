@@ -42,9 +42,18 @@ def build_all_collections() -> None:
 
 
 def rag_query(collection_name: str, query: str, top_k: int = 5) -> list:
+    """Query a collection. Sanitizes query to prevent None values."""
     
     if collection_name not in COLLECTIONS:
         raise ValueError(f"Unknown collection '{collection_name}'.")
+    
+    # ── Ensure query is valid string ──
+    if query is None:
+        raise ValueError(f"Query is None for collection '{collection_name}'")
+    query = str(query).strip()
+    
+    if not query:
+        raise ValueError(f"Query is empty for collection '{collection_name}'")
 
     return query_collection(collection_name, query, top_k=top_k)
 

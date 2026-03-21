@@ -17,5 +17,15 @@ def embed_texts(texts: list) -> list:
 
 
 def embed_query(query: str) -> list:
+    """Embed a query string into a vector."""
+    
+    # ── Ensure query is valid string ──
+    if query is None:
+        raise ValueError("Query is None in embed_query")
+    query = str(query).strip()
+    
+    if not query:
+        raise ValueError("Query is empty in embed_query")
     
     vector = _model.encode([query], convert_to_numpy=False)[0]
+    return vector.tolist()

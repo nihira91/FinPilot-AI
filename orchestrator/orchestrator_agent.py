@@ -29,10 +29,17 @@ def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
 
 
 # ── Agent State ───────────────────────────────────────────
-class AgentState(TypedDict):
+from typing import Optional
+import pandas as pd
+
+class AgentState(TypedDict, total=False):
     query: str
     route: str
     routes: list
+    financial_csv: Optional[pd.DataFrame]
+    sales_csv: Optional[pd.DataFrame]
+    financial_column_mapping: Optional[dict]
+    sales_column_mapping: Optional[dict]
     investment_output: str
     financial_output: str
     sales_output: str
@@ -43,6 +50,15 @@ class AgentState(TypedDict):
 # ── Orchestrator Node ─────────────────────────────────────
 def orchestrator_node(state: AgentState):
     query = state["query"]
+    
+    # ── Ensure query is valid string ──
+    if query is None:
+        raise ValueError("Query is None - should not reach here")
+    query = str(query).strip()
+    
+    if not query:
+        raise ValueError("Query is empty - should not reach here")
+    
     print(f"\n[Orchestrator] Query received: {query}")
 
     chunks  = rag_query("routing_rules", query, top_k=5)
@@ -115,13 +131,17 @@ def investment_node(state: AgentState):
 
 def financial_node(state: AgentState):
     print("[Financial Agent] Running...")
-    result = financial_run(state["query"])
+    csv_data = state.get("financial_csv")
+    column_mapping = state.get("financial_column_mapping")
+    result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
     return {"financial_output": result["response"]}
 
 
 def sales_node(state: AgentState):
     print("[Sales Agent] Running...")
-    result = sales_run(state["query"])
+    csv_data = state.get("sales_csv")
+    column_mapping = state.get("sales_column_mapping")
+    result = sales_run(state["query"], df=csv_data, column_mapping=column_mapping)
     return {"sales_output": result["response"]}
 
 
@@ -140,12 +160,16 @@ def multi_agent_node(state: AgentState):
 
     if "financial" in routes:
         print("[Financial Agent] Running...")
-        result = financial_run(state["query"])
+        csv_data = state.get("financial_csv")
+        column_mapping = state.get("financial_column_mapping")
+        result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
         updates["financial_output"] = result["response"]
 
     if "sales" in routes:
         print("[Sales Agent] Running...")
-        result = sales_run(state["query"])
+        csv_data = state.get("sales_csv")
+        column_mapping = state.get("sales_column_mapping")
+        result = sales_run(state["query"], df=csv_data, column_mapping=column_mapping)
         updates["sales_output"] = result["response"]
 
     if "investment" in routes:
