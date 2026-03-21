@@ -1,13 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# financial_agent.py — Financial Analyst Agent
-#
-# PURPOSE : Analyse financial data using Pandas and RAG pipeline,
-#           then interpret results using Gemini LLM.
-#
-# HOW ORCHESTRATOR USES THIS:
-#   from agents.financial_agent import run
-#   result = run("What is our Q3 profit performance?")
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 import os
 import pandas as pd
