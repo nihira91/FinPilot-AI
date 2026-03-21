@@ -1,17 +1,5 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# test_rag_pipeline.py  —  Step 6 : Test RAG pipeline independently
-#
-# PURPOSE : Verify each layer of the pipeline works correctly in isolation.
-#
-# WHY TEST EACH LAYER SEPARATELY ?
-#   If something breaks you know immediately which layer is the problem:
-#   chunker? embedder? ChromaDB? This makes debugging fast.
-#
-# HOW TO RUN :
-#   python tests/test_rag_pipeline.py
-#   or:
-#   python -m pytest tests/test_rag_pipeline.py -v
-# ─────────────────────────────────────────────────────────────────────────────
+#Test RAG pipeline independently
+
 
 import sys, os
 # Add project root to path so imports work when run from any directory
@@ -23,7 +11,7 @@ from rag.vector_store import add_chunks_to_collection, query_collection
 from rag.pipeline     import rag_query, format_context
 
 
-# ── Helper : synthetic document chunks (no real PDFs needed for unit tests) ───
+#synthetic document chunks 
 MOCK_CHUNKS = {
     "financial_reports": [
         {"text": "Q3 net profit increased by 18% to $4.2M due to cost reduction.",
@@ -63,7 +51,7 @@ def separator(title: str):
     print('─'*60)
 
 
-# ── Test 1 : Chunker ──────────────────────────────────────────────────────────
+# Chunker 
 
 def test_chunker():
     separator("Chunker")
@@ -87,7 +75,7 @@ def test_chunker():
     print(f"✓ chunk_documents() adds 'source' and 'chunk_id' metadata correctly")
 
 
-# ── Test 2 : Embedder ─────────────────────────────────────────────────────────
+# Embedder 
 
 def test_embedder():
     separator("Embedder")
@@ -112,7 +100,7 @@ def test_embedder():
     print(f"✓ embed_query() : vector of {len(query_vec)} dims")
 
 
-# ── Test 3 : ChromaDB VectorStore (each collection) ───────────────────────────
+# ChromaDB VectorStore  
 
 def test_all_collections():
     separator("ChromaDB — all 5 collections")
@@ -120,7 +108,7 @@ def test_all_collections():
     for collection_name, chunks in MOCK_CHUNKS.items():
         print(f"\n  ▸ Testing collection : {collection_name}")
 
-        # Add mock chunks (safe to call multiple times — skips duplicates)
+        # Add mock chunks 
         add_chunks_to_collection(collection_name, chunks)
 
         # Query each collection with a relevant phrase
@@ -143,7 +131,7 @@ def test_all_collections():
               f"{results[0]['text'][:60]} …")
 
 
-# ── Test 4 : format_context() ─────────────────────────────────────────────────
+#  format_context() 
 
 def test_format_context():
     separator("format_context()")
@@ -165,13 +153,12 @@ def test_format_context():
     print(f"  Preview :\n{formatted[:200]} …")
 
 
-# ── Test 5 : rag_query() end-to-end via pipeline ──────────────────────────────
+#  rag_query() 
 
 def test_rag_query_pipeline():
     separator("rag_query() — end-to-end pipeline")
 
     # Pre-populate the investment_reports collection with mock data
-    # (build_collection() would load real PDFs; we skip that for unit tests)
     add_chunks_to_collection("investment_reports", MOCK_CHUNKS["investment_reports"])
 
     results = rag_query("investment_reports",
@@ -187,7 +174,7 @@ def test_rag_query_pipeline():
         print(f"  [{r['distance']}] {r['text'][:60]} … ({r['source']})")
 
 
-# ── Run all tests ─────────────────────────────────────────────────────────────
+# Run all tests 
 
 if __name__ == "__main__":
     print("=" * 60)
