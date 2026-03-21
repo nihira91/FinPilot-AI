@@ -1,18 +1,5 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# test_comparison.py  —  Step 9 : Compare Single-LLM vs Multi-Agent RAG Output
-#
-# PURPOSE : Demonstrate why RAG + specialised agents produce better answers
-#           than asking a single LLM with no document context.
-#
-# THIS IS YOUR EVALUATION SECTION — important for the project report.
-#
-# HOW IT WORKS :
-#   We send THE SAME query twice:
-#   (A) Single LLM  : no context, just the raw question
-#   (B) RAG Agent   : context retrieved from documents, then answered
-#
-#   We then compare the outputs side-by-side and show WHY (B) is better.
-# ─────────────────────────────────────────────────────────────────────────────
+# Compare Single-LLM vs Multi-Agent RAG Output
+
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,7 +10,7 @@ from rag.pipeline          import rag_query, format_context
 from rag.hf_llm            import call_llm
 
 
-# ── Mock data simulating real consultant reports ───────────────────────────────
+# Mock data simulating real consultant reports 
 MOCK_INVESTMENT_CHUNKS = [
     {
         "text": "Accenture's 2024 report recommends a 35% allocation to Southeast "
@@ -55,7 +42,7 @@ def run_single_llm(query: str) -> str:
     """
     print("\n[Comparison] Running Single-LLM (no RAG context) …")
 
-    # Generic system prompt — no specialisation, no document context
+    # Generic system prompt, no specialisation, no document context
     system = "You are a general financial assistant. Answer the question concisely."
 
     # build_comparison_prompt() creates a plain prompt with no injected documents
@@ -105,7 +92,7 @@ def compare_and_display(query: str) -> dict:
     single_response = run_single_llm(query)
     rag_response    = run_rag_agent(query)
 
-    # ── Print Side-by-Side ─────────────────────────────────────────────────────
+    # Print Side-by-Side 
     print("\n" + "─"*60)
     print(" APPROACH A : Single LLM (no document context)")
     print("─"*60)
@@ -116,7 +103,7 @@ def compare_and_display(query: str) -> dict:
     print("─"*60)
     print(rag_response)
 
-    # ── Analysis of Differences ────────────────────────────────────────────────
+    # Analysis of Differences 
     notes = evaluate_difference(single_response, rag_response)
     print("\n" + "─"*60)
     print(" EVALUATION : Why RAG Agent is better")
@@ -144,7 +131,7 @@ def evaluate_difference(single: str, rag: str) -> list:
     """
     notes = []
 
-    # Check 1 : Does the RAG response cite specific numbers ?
+    #Does the RAG response cite specific numbers ?
     import re
     single_numbers = len(re.findall(r'\d+\.?\d*%|\$\d+|\d+\.\d+', single))
     rag_numbers    = len(re.findall(r'\d+\.?\d*%|\$\d+|\d+\.\d+', rag))
@@ -154,13 +141,13 @@ def evaluate_difference(single: str, rag: str) -> list:
             f"{single_numbers} in single LLM → more data-grounded"
         )
 
-    # Check 2 : Does the RAG response reference document sources ?
+    #Does the RAG response reference document sources ?
     if any(keyword in rag.lower() for keyword in ["source", "report", "accenture", "mckinsey", "deloitte", "pdf"]):
         notes.append("RAG response cites actual source documents → traceable, auditable")
     else:
         notes.append("Single LLM gives generic advice with no document backing")
 
-    # Check 3 : Is the RAG response more structured ?
+    #Is the RAG response more structured ?
     rag_headers    = rag.count("##")
     single_headers = single.count("##")
     if rag_headers > single_headers:
@@ -169,14 +156,14 @@ def evaluate_difference(single: str, rag: str) -> list:
             f"{single_headers} → more organised for decision-making"
         )
 
-    # Check 4 : Response length as a proxy for detail
+    #Response length as a proxy for detail
     if len(rag) > len(single) * 1.2:
         notes.append(
             f"RAG response is {len(rag)} chars vs {len(single)} chars "
             f"→ more thorough analysis"
         )
 
-    # Check 5 : Hallucination risk
+    # Hallucination risk
     notes.append(
         "Single LLM may hallucinate specific figures (no grounding). "
         "RAG response is constrained to retrieved document content → lower hallucination risk."
