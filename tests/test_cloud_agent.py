@@ -1,18 +1,6 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# test_cloud_agent.py
-#
-# PURPOSE : Standalone test for the Cloud Architect Agent.
-#           Run this file to verify the agent works end-to-end.
-#
-# USAGE:
-#   python test_cloud_agent.py
-#
-# WHAT IT TESTS:
-#   1. Index build from docs/cloud_docs/   (skips if already built)
-#   2. RAG-powered query
-#   3. Baseline (no-RAG) query
-#   4. Side-by-side comparison print
-# ─────────────────────────────────────────────────────────────────────────────
+
+# Standalone test for the Cloud Architect Agent.
+
 
 import sys
 import os
@@ -40,11 +28,11 @@ def run_tests():
     print("CLOUD ARCHITECT AGENT — TEST SUITE")
     print(DIVIDER)
 
-    # ── Step 1: Build index (safe to call if already built) ────────────────────
+    # Build index 
     print("\n[TEST] Step 1: Ensuring cloud_docs collection is indexed…")
     build_cloud_index()
 
-    # ── Step 2: Test each query ────────────────────────────────────────────────
+    #  Test each query 
     for i, query in enumerate(TEST_QUERIES, start=1):
         print(f"\n{DIVIDER}")
         print(f"[TEST {i}] Query: {query}")
@@ -63,7 +51,7 @@ def run_tests():
             print("\n--- BASELINE (No RAG) OUTPUT ---")
             print(baseline_result)
 
-    # ── Step 3: Comparison test (Query 1 only) ─────────────────────────────────
+    # Comparison test 
     print(f"\n{DIVIDER}")
     print("[TEST] Step 3: RAG vs Baseline Comparison (Query 1)")
     print(DIVIDER)
