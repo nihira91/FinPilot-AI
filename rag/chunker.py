@@ -1,24 +1,6 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# chunker.py
-#
-# PURPOSE : Split long document text into smaller, overlapping pieces ("chunks").
-#
-# WHY DO WE CHUNK ?
-#   An LLM has a context-window limit (e.g. 4 096 or 8 192 tokens).
-#   A 40-page consultant report is far too long to pass in whole.
-#   We break it into ~500-character pieces and only send the TOP-K most
-#   relevant pieces to the LLM — this is the core idea of RAG.
-#
-# WHY OVERLAP ?
-#   If a key sentence sits exactly at the border between two chunks,
-#   overlap (shared characters between neighbours) ensures that sentence
-#   is fully captured in at least one chunk and not cut in half.
-#
-# WHY RecursiveCharacterTextSplitter ?
-#   It tries to split on paragraph breaks first (\n\n), then single newlines,
-#   then spaces, then individual characters as a last resort.
-#   This keeps chunks semantically meaningful rather than cutting mid-sentence.
-# ─────────────────────────────────────────────────────────────────────────────
+
+#  Split long document text into smaller, overlapping pieces ("chunks").
+
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -71,7 +53,7 @@ def chunk_documents(documents: dict) -> list:
             all_chunks.append({
                 "text":     chunk,
                 "source":   filename,
-                # chunk_id must be a UNIQUE string — ChromaDB uses it as a primary key
+                # ChromaDB uses it as a primary key
                 "chunk_id": f"{filename}_chunk_{i}"
             })
 
