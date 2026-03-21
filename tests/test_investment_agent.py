@@ -1,16 +1,5 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# test_investment_agent.py  —  Step 7 : Test Investment Agent independently
-#
-# PURPOSE : Verify the Investment Strategist Agent produces a valid response
-#           without relying on real PDFs or live API calls (optional mock mode).
-#
-# HOW TO RUN :
-#   # With real HuggingFace API (needs HF_API_TOKEN in .env):
-#   python tests/test_investment_agent.py
-#
-#   # Without API (mock LLM response — checks structure only):
-#   MOCK_LLM=true python tests/test_investment_agent.py
-# ─────────────────────────────────────────────────────────────────────────────
+#  Test Investment Agent independently
+
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +8,7 @@ from rag.vector_store import add_chunks_to_collection
 from rag.pipeline     import rag_query
 
 
-# Mock investment document chunks — stand-ins for real PDF content
+# Mock investment document chunks 
 MOCK_INVESTMENT_CHUNKS = [
     {
         "text": "The consultant report recommends a 30% portfolio allocation to "
@@ -52,7 +41,7 @@ def test_rag_retrieval_for_agent():
     """Step 7a — Verify agent retrieves correct chunks before calling LLM."""
     print("\n── TEST 7a : RAG Retrieval for Investment Agent ─────────────")
 
-    # Inject mock data directly — no real PDFs needed
+    # Inject mock data directly, no real PDFs needed
     add_chunks_to_collection("investment_reports", MOCK_INVESTMENT_CHUNKS)
 
     query = "What allocation strategy is recommended and what are the risks?"
@@ -79,7 +68,7 @@ def test_agent_full_run_with_mock_llm():
     # Inject mock data
     add_chunks_to_collection("investment_reports", MOCK_INVESTMENT_CHUNKS)
 
-    # Patch call_llm() to return a fake response — no API call made
+    # Patch call_llm() to return a fake response ,no API call made
     fake_llm_response = """## Executive Summary
 Based on the provided documents, a diversified strategy with emerging market
 exposure is recommended alongside technology sector positions.
