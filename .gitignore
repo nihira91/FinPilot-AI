@@ -48,3 +48,5 @@ build/
 # Testing
 .pytest_cache/
 .coverage
+
+croma_store/

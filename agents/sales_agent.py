@@ -1,13 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# sales_agent.py — Sales & Data Scientist Agent
-#
-# PURPOSE : Analyse sales trends using Pandas/NumPy and RAG pipeline,
-#           then interpret results using Gemini LLM.
-#
-# HOW ORCHESTRATOR USES THIS:
-#   from agents.sales_agent import run
-#   result = run("What are our sales trends?")
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 import os
 import pandas as pd
@@ -68,81 +59,168 @@ def detect_sales_columns(df: pd.DataFrame) -> list:
 def compute_detailed_trends(df: pd.DataFrame, column_mapping: dict = None) -> dict:
     """
     Compute comprehensive sales trends with auto-detection of sales columns.
+    Handles dataset schema with month/product/region/sales_amount/units_sold etc.
     """
     trends = {}
-    
+
+    if df is None or df.empty:
+        return {"error": "No sales data available"}
+
     if column_mapping is None:
         column_mapping = {}
-    
-    sales_col = column_mapping.get("sales", "sales")
-    
-    if sales_col not in df.columns:
+
+    # Detect primary numbers
+    sales_col = column_mapping.get("sales", None)
+    candidates = ["sales_amount", "sales", "revenue", "amount"]
+    if sales_col is None:
+        sales_col = next((c for c in candidates if c in df.columns), None)
+
+    if sales_col is None:
         detected = detect_sales_columns(df)
         if detected:
             sales_col = detected[0]
         else:
             return {"error": "No sales/revenue columns found"}
-    
-    series = df[sales_col].astype(float)
+
+    # Ensure numeric and handle non-numeric safely
+    df = df.copy()
+    df[sales_col] = pd.to_numeric(df[sales_col], errors="coerce")
+    sales_series = df[sales_col].dropna()
+
+    if sales_series.empty:
+        return {"error": f"Sales column '{sales_col}' has no numeric values"}
+
     trends["primary_metric"] = sales_col
-    trends["count"] = int(series.size)
-    trends["mean"] = float(series.mean())
-    trends["median"] = float(series.median())
-    trends["std"] = float(series.std())
-    trends["min"] = float(series.min())
-    trends["max"] = float(series.max())
-    trends["total"] = float(series.sum())
-    
-    if series.size >= 2:
-        first_val = series.iloc[0]
-        last_val = series.iloc[-1]
-        growth = (last_val - first_val) / max(abs(first_val), 1e-9)
-        trends["period_growth_rate"] = float(growth)
-        trends["period_growth_percent"] = float(growth * 100)
-    
+    trends["count"] = int(sales_series.size)
+    trends["mean"] = float(sales_series.mean())
+    trends["median"] = float(sales_series.median())
+    trends["std"] = float(sales_series.std(ddof=0))
+    trends["min"] = float(sales_series.min())
+    trends["max"] = float(sales_series.max())
+    trends["total"] = float(sales_series.sum())
+
+    # Period trend using month/date if available
+    period_col = column_mapping.get("period", None)
+    if period_col is None:
+        for option in ["month", "date", "period"]:
+            if option in df.columns:
+                period_col = option
+                break
+
+    if period_col in df.columns:
+        try:
+            df[period_col + "__parsed"] = pd.to_datetime(df[period_col], errors="coerce")
+            if df[period_col + "__parsed"].notna().any():
+                growth_frame = df.dropna(subset=[period_col + "__parsed", sales_col])
+                growth_frame = growth_frame.sort_values(period_col + "__parsed")
+                if not growth_frame.empty:
+                    first_val = pd.to_numeric(growth_frame[sales_col], errors="coerce").iloc[0]
+                    last_val = pd.to_numeric(growth_frame[sales_col], errors="coerce").iloc[-1]
+                    trends["period_growth_rate"] = float((last_val - first_val) / max(abs(first_val), 1e-9))
+                    trends["period_growth_percent"] = float(trends["period_growth_rate"] * 100)
+                    # monthly breakdown
+                    by_period = growth_frame.groupby(growth_frame[period_col + "__parsed"].dt.to_period("M"))[sales_col].agg(["sum", "mean", "count"])
+                    trends["period_breakdown"] = {str(idx): {"total": float(r["sum"]), "average": float(r["mean"]), "count": int(r["count"])} for idx, r in by_period.iterrows()}
+                    trends["best_period"] = str(by_period["sum"].idxmax())
+                    trends["worst_period"] = str(by_period["sum"].idxmin())
+        except Exception:
+            pass
+
+    # Numeric columns by strategy
+    units_col = column_mapping.get("units", "units_sold")
+    if units_col in df.columns:
+        df[units_col] = pd.to_numeric(df[units_col], errors="coerce")
+        units_series = df[units_col].dropna()
+        if not units_series.empty:
+            trends["units_sold_total"] = float(units_series.sum())
+            trends["units_sold_mean"] = float(units_series.mean())
+
+    if "total" in trends and trends.get("units_sold_total", 0) > 0:
+        trends["revenue_per_unit"] = float(trends["total"] / trends["units_sold_total"])
+
+    new_clients_col = column_mapping.get("new_clients", "new_clients")
+    if new_clients_col in df.columns:
+        df[new_clients_col] = pd.to_numeric(df[new_clients_col], errors="coerce")
+        nc = df[new_clients_col].dropna()
+        if not nc.empty:
+            trends["new_clients_total"] = int(nc.sum())
+            trends["new_clients_mean"] = float(nc.mean())
+
+    churned_col = column_mapping.get("churned_clients", "churned_clients")
+    if churned_col in df.columns:
+        df[churned_col] = pd.to_numeric(df[churned_col], errors="coerce")
+        cc = df[churned_col].dropna()
+        if not cc.empty:
+            trends["churned_clients_total"] = int(cc.sum())
+            trends["churned_clients_mean"] = float(cc.mean())
+
+    if "avg_deal_size" in df.columns:
+        ds = pd.to_numeric(df["avg_deal_size"], errors="coerce").dropna()
+        if not ds.empty:
+            trends["average_deal_size"] = float(ds.mean())
+    elif "revenue_per_unit" in trends:
+        trends["average_deal_size"] = float(trends["revenue_per_unit"])
+
+    if "sales_growth_pct" in df.columns:
+        pct = pd.to_numeric(df["sales_growth_pct"], errors="coerce").dropna()
+        if not pct.empty:
+            trends["sales_growth_pct_mean"] = float(pct.mean())
+            trends["sales_growth_pct_median"] = float(pct.median())
+
+    # Regression and forecast
     try:
-        x = np.arange(series.size)
-        coeffs = np.polyfit(x, series.values, 1)
+        x = np.arange(sales_series.size)
+        coeffs = np.polyfit(x, sales_series.values, 1)
         slope, intercept = coeffs[0], coeffs[1]
         trends["slope"] = float(slope)
         trends["intercept"] = float(intercept)
-        trends["next_period_prediction"] = float(slope * series.size + intercept)
-        
+        trends["next_period_prediction"] = float(slope * sales_series.size + intercept)
+
         y_pred = slope * x + intercept
-        ss_res = np.sum((series.values - y_pred) ** 2)
-        ss_tot = np.sum((series.values - series.mean()) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-        trends["forecast_confidence"] = float(r_squared)
+        ss_res = np.sum((sales_series.values - y_pred) ** 2)
+        ss_tot = np.sum((sales_series.values - sales_series.mean()) ** 2)
+        trends["forecast_confidence"] = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
     except Exception:
         trends["slope"] = None
         trends["intercept"] = None
         trends["next_period_prediction"] = None
-    
-    other_sales_cols = detect_sales_columns(df)
-    if len(other_sales_cols) > 1:
+        trends["forecast_confidence"] = 0.0
+
+    # Add additional sales columns summary
+    all_sales_cols = detect_sales_columns(df)
+    if len(all_sales_cols) > 1:
         trends["all_sales_columns"] = {}
-        for col in other_sales_cols:
+        for col in all_sales_cols:
             if col != sales_col:
-                col_sum = float(df[col].sum())
-                col_mean = float(df[col].mean())
-                trends["all_sales_columns"][col] = {
-                    "total": col_sum,
-                    "average": col_mean
-                }
-    
-    period_col = next((col for col in df.columns if col.lower() in ['month', 'date', 'period', 'region', 'category']), None)
-    if period_col and period_col != sales_col:
-        period_data = df.groupby(period_col)[sales_col].agg(['sum', 'mean', 'count'])
-        trends["period_breakdown"] = {}
-        for period, row in period_data.iterrows():
-            trends["period_breakdown"][str(period)] = {
-                "total": float(row['sum']),
-                "average": float(row['mean']),
-                "count": int(row['count'])
-            }
-        trends["best_period"] = str(period_data['sum'].idxmax())
-        trends["worst_period"] = str(period_data['sum'].idxmin())
-    
+                cnum = pd.to_numeric(df[col], errors="coerce").dropna()
+                if not cnum.empty:
+                    trends["all_sales_columns"][col] = {"total": float(cnum.sum()), "average": float(cnum.mean())}
+
+    # Add full column-level diagnostics (all columns considered)
+    trends["column_summary"] = {}
+    for col in df.columns:
+        col_info = {
+            "dtype": str(df[col].dtype),
+            "missing": int(df[col].isna().sum()),
+            "unique": int(df[col].nunique(dropna=True)),
+        }
+        if pd.api.types.is_numeric_dtype(df[col]):
+            numeric = pd.to_numeric(df[col], errors="coerce").dropna()
+            if not numeric.empty:
+                col_info.update({
+                    "mean": float(numeric.mean()),
+                    "median": float(numeric.median()),
+                    "std": float(numeric.std(ddof=0)),
+                    "min": float(numeric.min()),
+                    "max": float(numeric.max()),
+                    "sum": float(numeric.sum()),
+                })
+        else:
+            top = df[col].dropna().astype(str).value_counts().head(5)
+            col_info["top_values"] = [{"value": idx, "count": int(cnt)} for idx, cnt in top.items()]
+
+        trends["column_summary"][col] = col_info
+
     return trends
 
 
