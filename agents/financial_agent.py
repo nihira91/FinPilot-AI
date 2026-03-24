@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from rag.pipeline import rag_query, format_context
-from utils.forecasting import forecast_revenue, forecast_summary_text
+from rag.vector_store import query_with_domain_filter
 
 load_dotenv()
 
@@ -41,20 +41,6 @@ def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
     return response.text.strip()
 
 
-def check_if_forecast_requested(query: str) -> bool:
-    """
-    Check if user is asking for forecast/prediction.
-    Returns True if forecast-related keywords detected.
-    """
-    forecast_keywords = [
-        'forecast', 'predict', 'projection', 'future',
-        'next quarter', 'next month', 'next period', 'next year',
-        'trend', 'growth rate', 'expected', 'estimate'
-    ]
-    query_lower = query.lower()
-    return any(keyword in query_lower for keyword in forecast_keywords)
-
-
 def validate_response_against_metrics(response: str, metrics: dict, query: str = "") -> str:
     """
     Validate that LLM response doesn't introduce hallucinated data.
@@ -71,10 +57,6 @@ def validate_response_against_metrics(response: str, metrics: dict, query: str =
     if not has_numeric_metrics:
         if any(keyword in response.lower() for keyword in ['$', 'revenue', 'profit', 'expenses', 'costs', 'income']):
             hallucination_warnings.append("\n⚠️ WARNING: Financial numbers claimed but no CSV metrics were computed. Using document knowledge only.")
-    
-    # Check if forecast is being included when not requested
-    if "forecast" in response.lower() and not check_if_forecast_requested(query):
-        hallucination_warnings.append("\n⚠️ NOTE: Forecast mentioned but not requested. Forecast only requested by user.")
     
     if hallucination_warnings:
         return response + "\n" + "".join(hallucination_warnings)
@@ -356,7 +338,7 @@ def compute_metrics(df: pd.DataFrame, column_mapping: dict = None) -> dict:
     return simple
 
 
-def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None, forecast_column: str = None, model_type: str = "polynomial") -> dict:
+def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dict:
     """
     Main entry point for Financial Analyst Agent.
     Called by Orchestrator whenever financial analysis is needed.
@@ -365,15 +347,12 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None, foreca
         query : question from Orchestrator
         df    : optional DataFrame with financial data
         column_mapping : dict mapping {"revenue": col_name, "cogs": col_name, "expenses": col_name}
-        forecast_column : specific column to forecast (auto-detected if None)
-        model_type : which forecasting model to use ("polynomial", "exponential")
 
     Returns:
         {
           "agent"    : "Financial Analyst",
           "query"    : original query,
           "metrics"  : computed financial metrics,
-          "forecast_data": ML forecast data,
           "response" : LLM full analysis
         }
     """
@@ -465,34 +444,7 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None, foreca
         metrics = {}
         metrics_text = "No financial data provided. Analyze from documents only."
 
-    # Step 3: Revenue Forecast (ONLY if user requests it)
-    forecast_text = ""
-    forecast_data = None
-    should_forecast = check_if_forecast_requested(query)
-    
-    if should_forecast and df is not None and not df.empty:
-        try:
-            print(f"[Financial Agent] User requested forecast. Attempting forecast for column: {forecast_column}")
-            print(f"[Financial Agent] Using model: {model_type}")
-            
-            forecast_data = forecast_revenue(df, periods=4, column_to_forecast=forecast_column, model_type=model_type)
-            
-            if "error" in forecast_data:
-                print(f"[Financial Agent] Forecast error: {forecast_data['error']}")
-                forecast_text = f"Forecast note: {forecast_data['error']}"
-            else:
-                forecast_text = forecast_summary_text(forecast_data)
-                print(f"[Financial Agent] Forecast successful - accuracy: {forecast_data.get('accuracy')}%")
-        except Exception as e:
-            print(f"[Financial Agent] Exception computing forecast: {str(e)}")
-            forecast_text = f"Forecast unavailable: {str(e)}"
-    else:
-        if should_forecast:
-            forecast_text = "Forecast requested but no CSV data available."
-        else:
-            forecast_text = "No forecast requested by user."
-    
-    # Step 4: LLM interprets metrics ONLY (CSV takes priority over RAG)
+    # Step 3: LLM interprets metrics ONLY (CSV takes priority over RAG)
     # Ensure all components are valid strings
     query_str = str(query) if query else "No query provided"
     
@@ -502,14 +454,25 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None, foreca
         context_instruction = "🔴 CRITICAL: IGNORE ANY GENERAL KNOWLEDGE. Use ONLY the computed metrics below. Do NOT reference documents or external knowledge."
         context_str = ""  # Suppress RAG context entirely when CSV provided
         print(f"[Financial Agent] Using CSV-only mode. Suppressing all external context.")
+        data_source = "CSV"
     else:
-        # No CSV data - use RAG context
-        context_str = str(context) if context else "No context available"
-        context_instruction = "Use the retrieved context below to answer. Do NOT use external knowledge not in the context."
-        print(f"[Financial Agent] Using RAG-only mode. Using document context.")
+        # No CSV data - use domain-filtered RAG context
+        try:
+            filtered_chunks, domain_relevance = query_with_domain_filter(
+                "financial_reports", query, domain="financial", top_k=10
+            )
+            context = format_context(filtered_chunks) if filtered_chunks else ""
+            context_str = str(context) if context else "No context available"
+            context_instruction = "Use the retrieved financial context below to answer. Do NOT use external knowledge not in the context."
+            print(f"[Financial Agent] Using RAG-only mode with domain filtering (relevance: {domain_relevance:.2%}).")
+            data_source = "RAG Documents (Domain-Filtered)" if filtered_chunks else "RAG (No Docs)"
+        except Exception as e:
+            print(f"[Financial Agent] Domain filtering failed: {e}. Using basic RAG.")
+            context_str = ""
+            context_instruction = "Use only explicit facts from the context."
+            data_source = "RAG (Fallback)"
     
     metrics_str = str(metrics_text) if metrics_text else "No metrics"
-    forecast_str = str(forecast_text) if forecast_text else "No forecast available"
     
     prompt = f"""You are a Financial Analyst AI agent in a multi-agent financial intelligence system.
 
@@ -527,9 +490,6 @@ MANDATORY RULES - BREAKING THESE CAUSES SYSTEM FAILURE:
 
 COMPUTED FINANCIAL METRICS FROM CSV:
 {metrics_str}
-
-REVENUE FORECAST (ML Model):
-{forecast_str}
 
 USER QUERY:
 {query_str}
@@ -563,11 +523,13 @@ Respond using EXACTLY this structure:
     print(f"[Financial Agent] Analysis complete.")
 
     return {
-        "agent":    "Financial Analyst",
-        "query":    query,
-        "metrics":  metrics,
-        "forecast_data": forecast_data,
+        "agent": "Financial Analyst",
+        "agent_domain": "Financial Performance Analysis",
+        "query": query,
+        "metrics": metrics,
         "response": response,
+        "data_source": data_source,
+        "confidence": "HIGH" if metrics else "MEDIUM",
     }
 
 

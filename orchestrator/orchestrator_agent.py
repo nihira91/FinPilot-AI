@@ -8,6 +8,9 @@ from rag.pipeline import rag_query, format_context, build_collection
 from agents.investment_strategist import run as investment_run
 from agents.financial_agent import run as financial_run
 from agents.sales_agent import run as sales_run
+from agents.cloud_agent import run as cloud_run
+from agents.visualization_agent import run as visualization_run
+from utils.visualization_helpers import detect_visualization_request, get_chart_type_suggestion
 
 load_dotenv()
 
@@ -40,14 +43,23 @@ class AgentState(TypedDict, total=False):
     sales_csv: Optional[pd.DataFrame]
     financial_column_mapping: Optional[dict]
     sales_column_mapping: Optional[dict]
-    forecast_column: Optional[str]
-    forecast_data: Optional[dict]
     model_type: Optional[str]
     investment_output: str
     financial_output: str
     sales_output: str
     cloud_output: str
     final_output: str
+    request_visualization: bool
+    chart_type: Optional[str]
+    visualization_output: Optional[dict]
+    agent_info: Optional[dict]
+    agent_info_financial: Optional[dict]
+    agent_info_sales: Optional[dict]
+    agent_info_investment: Optional[dict]
+    agent_info_cloud: Optional[dict]
+    financial_result: Optional[dict]
+    sales_result: Optional[dict]
+    investment_result: Optional[dict]
 
 
 # Orchestrator Node 
@@ -88,22 +100,32 @@ Example: financial,investment"""
         print("[Orchestrator] Ambiguous query — defaulting to financial,sales,investment")
         routes = ["financial", "sales", "investment"]
 
-    #Safety keyword check 
+    #Safety keyword check - only add if LLM didn't already route it
     query_lower = query.lower()
 
-    sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal"]
-    inv_keywords   = ["investment", "strategy", "consultant", "expansion", "strategic", "portfolio", "risks", "opportunities", "reports"]
-    fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly"]
-    cloud_keywords = ["cloud", "aws", "gcp", "infrastructure", "scalab", "deployment"]
+    # Only add if definitely not covered by LLM routing
+    # AND query doesn't already have a clear single route
+    if len(routes) == 0:
+        # Only use keywords if LLM routing returned nothing
+        sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal"]
+        fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue"]
+        inv_keywords   = ["investment", "portfolio", "expansion"]
+        cloud_keywords = ["cloud", "aws", "gcp", "infrastructure", "scalab", "deployment"]
 
-    if any(k in query_lower for k in sales_keywords) and "sales" not in routes:
-        routes.append("sales")
-    if any(k in query_lower for k in inv_keywords) and "investment" not in routes:
-        routes.append("investment")
-    if any(k in query_lower for k in fin_keywords) and "financial" not in routes:
-        routes.append("financial")
-    if any(k in query_lower for k in cloud_keywords) and "cloud" not in routes:
-        routes.append("cloud")
+        if any(k in query_lower for k in sales_keywords):
+            routes.append("sales")
+        elif any(k in query_lower for k in inv_keywords):
+            routes.append("investment")
+        elif any(k in query_lower for k in fin_keywords):
+            routes.append("financial")
+        elif any(k in query_lower for k in cloud_keywords):
+            routes.append("cloud")
+        else:
+            # Final fallback
+            routes = ["financial"]
+    
+    # Deduplicate routes
+    routes = list(set(routes))
 
     route = "multi_agent" if len(routes) > 1 else routes[0]
 
@@ -129,19 +151,32 @@ def route_query(state: AgentState) -> str:
 def investment_node(state: AgentState):
     print("[Investment Agent] Running...")
     result = investment_run(state["query"])
-    return {"investment_output": result["response"]}
+    return {
+        "investment_output": result["response"],
+        "investment_result": result,
+        "agent_info_investment": {
+            "agent": result.get("agent", "Investment Strategist"),
+            "agent_domain": result.get("agent_domain", "Investment Strategy & Portfolio Analysis"),
+            "data_source": result.get("data_source", "RAG Documents"),
+            "confidence": result.get("confidence", "MEDIUM"),
+        }
+    }
 
 
 def financial_node(state: AgentState):
     print("[Financial Agent] Running...")
     csv_data = state.get("financial_csv")
     column_mapping = state.get("financial_column_mapping")
-    forecast_column = state.get("forecast_column")
-    model_type = state.get("model_type", "polynomial")
-    result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping, forecast_column=forecast_column, model_type=model_type)
+    result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
     return {
         "financial_output": result["response"],
-        "forecast_data": result.get("forecast_data")
+        "financial_result": result,
+        "agent_info_financial": {
+            "agent": result.get("agent", "Financial Analyst"),
+            "agent_domain": result.get("agent_domain", "Financial Performance Analysis"),
+            "data_source": result.get("data_source", "CSV"),
+            "confidence": result.get("confidence", "HIGH"),
+        }
     }
 
 
@@ -150,13 +185,82 @@ def sales_node(state: AgentState):
     csv_data = state.get("sales_csv")
     column_mapping = state.get("sales_column_mapping")
     result = sales_run(state["query"], df=csv_data, column_mapping=column_mapping)
-    return {"sales_output": result["response"]}
+    return {
+        "sales_output": result["response"],
+        "sales_result": result,
+        "agent_info_sales": {
+            "agent": result.get("agent", "Sales Analyst"),
+            "agent_domain": result.get("agent_domain", "Sales & Revenue Analysis"),
+            "data_source": result.get("data_source", "CSV"),
+            "confidence": result.get("confidence", "HIGH"),
+        }
+    }
 
 
 def cloud_node(state: AgentState):
     print("[Cloud Agent] Running...")
     result = cloud_run(state["query"])
-    return {"cloud_output": result["response"]}
+    return {
+        "cloud_output": result["response"],
+        "agent_info_cloud": {
+            "agent": result.get("agent", "Cloud Architect"),
+            "agent_domain": result.get("agent_domain", "Cloud Infrastructure & Deployment"),
+            "data_source": result.get("data_source", "RAG Documents"),
+            "confidence": result.get("confidence", "MEDIUM"),
+        }
+    }
+
+
+# Visualization Node
+def visualization_node(state: AgentState):
+    """
+    Generate interactive charts from agent analysis results.
+    Runs conditionally when user requests visualization.
+    Handles both CSV data and PDF document analysis.
+    """
+    print("[Visualization Agent] Running...")
+    
+    # Determine which agent's output to visualize
+    # Priority: Financial > Sales > Investment (works with both CSV and PDF)
+    full_result = None
+    source = None
+    
+    if state.get("financial_result"):
+        full_result = state.get("financial_result")
+        source = "Financial Agent"
+        print(f"[Visualization Agent] Using data from: {source}")
+        print(f"[Visualization Agent] Agent: {full_result.get('agent', 'Unknown')}")
+        print(f"[Visualization Agent] Data source: {full_result.get('data_source', 'Unknown')}")
+        if "metrics" in full_result:
+            print(f"[Visualization Agent] ✓ Found metrics with {len(full_result['metrics'])} items")
+        else:
+            print(f"[Visualization Agent] ⚠ No metrics key found in result")
+    elif state.get("sales_result"):
+        full_result = state.get("sales_result")
+        source = "Sales Agent"
+        print(f"[Visualization Agent] Using data from: {source}")
+    elif state.get("investment_result"):
+        full_result = state.get("investment_result")
+        source = "Investment Agent"
+        print(f"[Visualization Agent] Using data from: {source}")
+    
+    if not full_result:
+        print("[Visualization Agent] No source data found in state")
+        print(f"[Visualization Agent] Available keys: {list(state.keys())}")
+        return {"visualization_output": {"charts": [], "error": "No agent result data available"}}
+    
+    # Call visualization agent
+    chart_type = state.get("chart_type", "auto")
+    try:
+        result = visualization_run(
+            agent_response=full_result,
+            chart_type=chart_type,
+            query=state["query"]
+        )
+        return {"visualization_output": result}
+    except Exception as e:
+        print(f"[Visualization Agent] Error: {e}")
+        return {"visualization_output": {"charts": [], "error": str(e)}}
 
 
 # Multi Agent Node 
@@ -170,12 +274,9 @@ def multi_agent_node(state: AgentState):
         print("[Financial Agent] Running...")
         csv_data = state.get("financial_csv")
         column_mapping = state.get("financial_column_mapping")
-        forecast_column = state.get("forecast_column")
-        model_type = state.get("model_type", "polynomial")
-        result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping, forecast_column=forecast_column, model_type=model_type)
+        result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
         updates["financial_output"] = result["response"]
-        if result.get("forecast_data"):
-            updates["forecast_data"] = result["forecast_data"]
+        updates["financial_result"] = result
 
     if "sales" in routes:
         print("[Sales Agent] Running...")
@@ -183,11 +284,13 @@ def multi_agent_node(state: AgentState):
         column_mapping = state.get("sales_column_mapping")
         result = sales_run(state["query"], df=csv_data, column_mapping=column_mapping)
         updates["sales_output"] = result["response"]
+        updates["sales_result"] = result
 
     if "investment" in routes:
         print("[Investment Agent] Running...")
         result = investment_run(state["query"])
         updates["investment_output"] = result["response"]
+        updates["investment_result"] = result
 
     if "cloud" in routes:
         print("[Cloud Agent] Running...")
@@ -235,9 +338,27 @@ Provide:
     final = call_gemini(summary_prompt)
     result = {"final_output": final}
     
-    # Pass through forecast_data if it exists 
-    if state.get("forecast_data"):
-        result["forecast_data"] = state["forecast_data"]
+    # Extract and pass the primary agent info (use first available agent's metadata)
+    if state.get("agent_info_financial"):
+        result["agent_info"] = state["agent_info_financial"]
+    elif state.get("agent_info_sales"):
+        result["agent_info"] = state["agent_info_sales"]
+    elif state.get("agent_info_investment"):
+        result["agent_info"] = state["agent_info_investment"]
+    elif state.get("agent_info_cloud"):
+        result["agent_info"] = state["agent_info_cloud"]
+    
+    # Pass through agent results for visualization (CSV or PDF data)
+    if state.get("financial_result"):
+        result["financial_result"] = state["financial_result"]
+    if state.get("sales_result"):
+        result["sales_result"] = state["sales_result"]
+    if state.get("investment_result"):
+        result["investment_result"] = state["investment_result"]
+    
+    # Pass through visualization if it was requested
+    if state.get("visualization_output"):
+        result["visualization_output"] = state["visualization_output"]
     
     return result
 
@@ -253,6 +374,7 @@ def build_graph():
     graph.add_node("cloud",        cloud_node)
     graph.add_node("multi_agent",  multi_agent_node)
     graph.add_node("aggregator",   aggregator_node)
+    graph.add_node("visualization", visualization_node)
 
     graph.set_entry_point("orchestrator")
 
@@ -273,7 +395,24 @@ def build_graph():
     graph.add_edge("investment",  "aggregator")
     graph.add_edge("cloud",       "aggregator")
     graph.add_edge("multi_agent", "aggregator")
-    graph.add_edge("aggregator",  END)
+    
+    # Conditional routing from aggregator to visualization
+    def should_visualize(state: AgentState) -> str:
+        if state.get("request_visualization"):
+            return "visualization"
+        return "end"
+    
+    graph.add_conditional_edges(
+        "aggregator",
+        should_visualize,
+        {
+            "visualization": "visualization",
+            "end": END,
+        }
+    )
+    
+    # Visualization ends the graph
+    graph.add_edge("visualization", END)
 
     return graph.compile()
 

@@ -10,10 +10,15 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
 from rag.pipeline import build_collection, COLLECTIONS
+from rag.session_store import clear_session
 from orchestrator.orchestrator_agent import build_graph
-from utils.forecasting import forecast_chart
+import shutil
 
 load_dotenv()
+
+# ── Session Upload Folder (Temporary) ─────────────────────
+TEMP_UPLOADS_ROOT = "temp_uploads"
+os.makedirs(TEMP_UPLOADS_ROOT, exist_ok=True)
 
 # ── Page Config ───────────────────────────────────────────
 st.set_page_config(
@@ -22,6 +27,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ── Session Management ─────────────────────────────────────
+if "session_initialized" not in st.session_state:
+    st.session_state.session_initialized = False
+    st.session_state.uploaded_collections = {}
+    st.session_state.session_id = str(int(time.time() * 1000))  # Unique session ID
 
 # ── Custom CSS ────────────────────────────────────────────
 st.markdown("""
@@ -474,6 +485,50 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Session Management Section ──
+    st.markdown("---")
+    st.markdown(
+        '<div class="sidebar-section-title">Session</div>',
+        unsafe_allow_html=True
+    )
+    
+    if st.button(
+        "🔄 New Session / Clear Data",
+        use_container_width=True
+    ):
+        # Clear ChromaDB session collections
+        clear_session()
+        
+        # Clear temp uploads for this session
+        session_temp_folder = os.path.join(TEMP_UPLOADS_ROOT, st.session_state.session_id)
+        if os.path.exists(session_temp_folder):
+            shutil.rmtree(session_temp_folder)
+            print(f"[Streamlit] Cleaned up: {session_temp_folder}")
+        
+        # Reset session state
+        st.session_state.session_initialized = False
+        st.session_state.uploaded_collections = {}
+        st.session_state.session_id = str(int(time.time() * 1000))  # New session ID
+        st.success("✓ Session cleared! Fresh start.")
+        st.rerun()
+
+    # Show uploaded files in current session
+    if st.session_state.uploaded_collections:
+        st.markdown(
+            '<div style="font-size:0.7rem;'
+            'color:#7A8899;margin-top:0.5rem;">'
+            'Current session data:</div>',
+            unsafe_allow_html=True
+        )
+        for col, files in st.session_state.uploaded_collections.items():
+            for f in files:
+                st.markdown(
+                    f'<div style="font-size:0.65rem;'
+                    f'color:#C9A84C;">📄 {f}</div>',
+                    unsafe_allow_html=True
+                )
+
+    st.markdown("---")
     st.markdown('<div class="sidebar-section-title">Upload Documents</div>', unsafe_allow_html=True)
 
     collection_labels = {
@@ -506,8 +561,9 @@ with st.sidebar:
             )
             
             if uploaded_files:
-                folder = COLLECTIONS[collection]
-                os.makedirs(folder, exist_ok=True)
+                # Create session-specific temp folder for user uploads (NOT docs/)
+                temp_collection_folder = os.path.join(TEMP_UPLOADS_ROOT, st.session_state.session_id, collection)
+                os.makedirs(temp_collection_folder, exist_ok=True)
                 
                 has_pdf = False
                 for uploaded_file in uploaded_files:
@@ -523,12 +579,18 @@ with st.sidebar:
                         except Exception as e:
                             st.error(f"Error reading {uploaded_file.name}: {str(e)}")
                     else:
-                        # Handle PDF files
-                        save_path = os.path.join(folder, uploaded_file.name)
+                        # Handle PDF files - Save to TEMP folder, NOT docs/
+                        save_path = os.path.join(temp_collection_folder, uploaded_file.name)
                         with open(save_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
-                        st.caption(f"✓ {uploaded_file.name} saved")
+                        st.caption(f"✓ {uploaded_file.name} saved (session-only)")
                         has_pdf = True
+                        
+                        # Track in session state (user collections only)
+                        if collection not in st.session_state.uploaded_collections:
+                            st.session_state.uploaded_collections[collection] = []
+                        if uploaded_file.name not in st.session_state.uploaded_collections[collection]:
+                            st.session_state.uploaded_collections[collection].append(uploaded_file.name)
                 
                 # Track collections with new PDFs to rebuild embeddings
                 if has_pdf and collection not in collections_to_rebuild:
@@ -564,37 +626,6 @@ with st.sidebar:
                         st.session_state.financial_column_mapping = mapping
                         st.caption(f"✓ Mapping: {mapping}")
                 
-                with st.expander("Forecast Settings", expanded=False):
-                    forecast_col_options = ["-- Auto-detect --"] + list(df.columns)
-                    forecast_col = st.selectbox(
-                        "Column to forecast:",
-                        forecast_col_options,
-                        key="forecast_column_select",
-                        help="Select which column to forecast. Auto-detect will choose the best option automatically."
-                    )
-                    
-                    if forecast_col != "-- Auto-detect --":
-                        st.session_state.forecast_column = forecast_col
-                        st.caption(f"✓ Forecasting: {forecast_col}")
-                    else:
-                        st.session_state.forecast_column = None
-                        st.caption("📊 Using smart auto-detection")
-                    
-                    # ── Model selection ──
-                    model_options = {
-                        "Polynomial Regression": "polynomial",
-                        "Exponential Smoothing": "exponential"
-                    }
-                    model_display = st.selectbox(
-                        "Forecasting Model:",
-                        list(model_options.keys()),
-                        index=0,
-                        key="model_select",
-                        help="Choose ML model for forecasting. Polynomial catches trends, Exponential weights recent data."
-                    )
-                    st.session_state.model_type = model_options[model_display]
-                    st.caption(f"🤖 Model: {model_display}")
-                    
             elif collection == "sales_reports" and "sales_csv" in st.session_state:
                 df = st.session_state.sales_csv
                 st.caption(f"📋 CSV data ready ({df.shape[0]}R × {df.shape[1]}C)")
@@ -609,28 +640,44 @@ with st.sidebar:
                         st.session_state.sales_column_mapping = {"sales": sales_col}
                         st.caption(f"✓ Mapping: sales → {sales_col}")
 
-    # ── Build Embeddings for New PDFs ──────────────────────────
+    # ── Build Embeddings for New PDFs & System Collections ──────────────────────────
     if collections_to_rebuild:
         st.markdown("---")
-        st.markdown('<div class="sidebar-section-title">Building Embeddings</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">Building User Collections</div>', unsafe_allow_html=True)
 
-        with st.spinner("🔄 Creating embeddings for uploaded documents..."):
+        with st.spinner("🔄 Creating embeddings for user documents..."):
             for collection in collections_to_rebuild:
                 try:
-                    build_collection(collection)
-                    st.info(f"✓ {collection}: embeddings created")
+                    # Pass session_id to use temp_uploads folder
+                    build_collection(collection, session_id=st.session_state.session_id)
+                    st.info(f"✓ {collection}: embeddings created (user session)")
                 except Exception as e:
-                    st.error(f"✗ {collection}: {str(e)}")
+                    error_str = str(e).lower()
+                    if "already exists" in error_str or "ephemeral" in error_str:
+                        st.info(f"✓ {collection}: collection ready")
+                    else:
+                        st.error(f"✗ {collection}: {str(e)}")
 
-    # ── Always ensure routing rules collection exists on disk (persistent) 
+    # ── Build System Collections Only ONCE per App Start ──────────────────────────
+    # Routing rules = permanent, disk-based. Build once, use forever.
     try:
         routing_folder = COLLECTIONS.get("routing_rules")
         if routing_folder and os.path.isdir(routing_folder):
             pdf_files = [f for f in os.listdir(routing_folder) if f.lower().endswith('.pdf')]
-            if pdf_files:
-                build_collection("routing_rules")
+            if pdf_files and not st.session_state.session_initialized:
+                with st.spinner("⚡ Initializing system collections (one-time)..."):
+                    try:
+                        build_collection("routing_rules")
+                        st.info("✓ Routing rules: persistent embeddings ready")
+                        st.session_state.session_initialized = True
+                    except Exception as build_err:
+                        if "already exists" in str(build_err).lower():
+                            st.info("✓ Routing rules: already initialized")
+                            st.session_state.session_initialized = True
+                        else:
+                            st.error(f"Build error: {str(build_err)}")
     except Exception as e:
-        st.warning(f"Routing rules embedding check failed: {str(e)}")
+        st.warning(f"System collection setup failed: {str(e)}")
 
     st.markdown("---")
 
@@ -688,7 +735,11 @@ with tab1:
 
     col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
     with col_btn2:
-        run_clicked = st.button("⚡ RUN ANALYSIS", type="primary", use_container_width=True)
+        col_run, col_viz = st.columns([2, 1])
+        with col_run:
+            run_clicked = st.button("⚡ RUN ANALYSIS", type="primary", use_container_width=True)
+        with col_viz:
+            visualize_toggled = st.checkbox("📈 Visualize", value=False, help="Generate charts when available")
 
     if run_clicked:
         if not query.strip():
@@ -710,8 +761,19 @@ with tab1:
                 progress.progress(40)
 
                 try:
+                    # Detect visualization request (keyword + toggle)
+                    from utils.visualization_helpers import detect_visualization_request, get_chart_type_suggestion
+                    
+                    wants_viz_auto, suggested_chart_type = detect_visualization_request(query)
+                    request_visualization = visualize_toggled or wants_viz_auto
+                    
                     graph  = build_graph()
-                    input_data = {"query": query}
+                    input_data = {"query": query, "request_visualization": request_visualization}
+                    
+                    # Set chart type if visualization requested
+                    if request_visualization:
+                        input_data["chart_type"] = suggested_chart_type or "auto"
+                    
                     if "financial_csv" in st.session_state:
                         input_data["financial_csv"] = st.session_state.financial_csv
                     if "sales_csv" in st.session_state:
@@ -720,10 +782,6 @@ with tab1:
                         input_data["financial_column_mapping"] = st.session_state.financial_column_mapping
                     if "sales_column_mapping" in st.session_state:
                         input_data["sales_column_mapping"] = st.session_state.sales_column_mapping
-                    if "forecast_column" in st.session_state:
-                        input_data["forecast_column"] = st.session_state.forecast_column
-                    if "model_type" in st.session_state:
-                        input_data["model_type"] = st.session_state.model_type
                     result = graph.invoke(input_data)
 
                     progress.progress(85)
@@ -746,6 +804,62 @@ with tab1:
 
                     st.markdown(f'<div class="result-wrapper">{result["final_output"]}</div>', unsafe_allow_html=True)
 
+                    # ── Agent Attribution Section ──
+                    agent_info = result.get("agent_info", {})
+                    if agent_info:
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            agent_name = agent_info.get("agent", "Unknown Agent")
+                            st.info(f"👤 **Agent**\n{agent_name}")
+                        with col2:
+                            domain = agent_info.get("agent_domain", "N/A")
+                            st.info(f"🎯 **Domain**\n{domain}")
+                        with col3:
+                            data_source = agent_info.get("data_source", "N/A")
+                            st.info(f"📊 **Data Source**\n{data_source}")
+                        with col4:
+                            confidence = agent_info.get("confidence", "N/A")
+                            confidence_color = "🟢" if confidence == "HIGH" else "🟡"
+                            st.info(f"{confidence_color} **Confidence**\n{confidence}")
+
+                    # ── Visualization Charts Display ──
+                    if result.get("visualization_output"):
+                        viz_result = result["visualization_output"]
+                        charts = viz_result.get("charts", [])
+                        
+                        if charts:
+                            st.markdown("""
+                            <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
+                                <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
+                                <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTERACTIVE CHARTS</span>
+                                <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Display each chart
+                            for chart in charts:
+                                with st.container():
+                                    col_title, col_type = st.columns([3, 1])
+                                    with col_title:
+                                        st.subheader(chart.get("title", "Chart"))
+                                    with col_type:
+                                        st.caption(f"📈 {chart.get('chart_type', 'chart').upper()}")
+                                    
+                                    # Render Plotly chart
+                                    try:
+                                        import json
+                                        import plotly.graph_objects as go
+                                        plotly_json = chart.get("plotly_json")
+                                        if plotly_json:
+                                            if isinstance(plotly_json, str):
+                                                chart_data = json.loads(plotly_json)
+                                            else:
+                                                chart_data = plotly_json
+                                            fig = go.Figure(chart_data)
+                                            st.plotly_chart(fig, use_container_width=True)
+                                    except Exception as e:
+                                        st.warning(f"Could not render chart: {str(e)}")
+                    
                     # Agent route badge
                     routes = result.get("routes", [result.get("route", "unknown")])
                     if isinstance(routes, list):
@@ -759,103 +873,6 @@ with tab1:
                         ROUTED → {agents_str}
                     </div>
                     """, unsafe_allow_html=True)
-
-                    # ── Forecast Chart Display ──
-                    if result.get("forecast_data") and "financial_csv" in st.session_state:
-                        fin_df = st.session_state.financial_csv
-                        
-                        st.markdown("""
-                        <div style="display:flex;align-items:center;
-                                    gap:10px;margin:1.5rem 0 1rem;">
-                            <div style="height:1px;flex:1;background:linear-gradient(
-                                90deg,transparent,rgba(201,168,76,0.3));"></div>
-                            <span style="font-family:'DM Mono',monospace;
-                                         font-size:0.65rem;color:#7A6230;
-                                         letter-spacing:0.2em;">
-                                REVENUE FORECAST
-                            </span>
-                            <div style="height:1px;flex:1;background:linear-gradient(
-                                90deg,rgba(201,168,76,0.3),transparent);"></div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        # ── Forecast Metrics ──────────────────────────────────
-                        fd = result["forecast_data"]
-                        
-                        if "error" not in fd:
-                            # Show model info in a small section
-                            model_name = fd.get("model_name", "Unknown Model")
-                            st.caption(f"🤖 Using: {model_name}")
-                            
-                            m1, m2, m3, m4 = st.columns(4)
-                            
-                            with m1:
-                                st.metric(
-                                    "Model Accuracy",
-                                    f"{fd['accuracy']}%",
-                                    delta = "ML Forecast"
-                                )
-                            with m2:
-                                st.metric(
-                                    "Last Actual",
-                                    f"₹{fd['last_actual']:,.0f}",
-                                    delta = "Current"
-                                )
-                            with m3:
-                                st.metric(
-                                    "Next Period",
-                                    f"₹{fd['next_predicted']:,.0f}",
-                                    delta = f"{fd['growth_rate']:+.1f}% growth",
-                                    delta_color = "normal" if fd['growth_rate'] > 0 
-                                                  else "inverse"
-                                )
-                            with m4:
-                                trend = "📈 Upward" if fd['growth_rate'] > 0 \
-                                        else "📉 Downward"
-                                st.metric(
-                                    "Trend",
-                                    trend,
-                                    delta = f"{fd['growth_rate']:+.1f}%",
-                                    delta_color = "normal" if fd['growth_rate'] > 0 
-                                                  else "inverse"
-                                )
-
-                            # ── Forecast Chart ────────────────────────────────
-                            fig = forecast_chart(fin_df, fd)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
-
-                            # ── Period Predictions Table ──────────────────────
-                            st.markdown("""
-                            <div style="font-family:'DM Mono',monospace;
-                                        font-size:0.65rem;color:#7A6230;
-                                        letter-spacing:0.2em;
-                                        margin:1rem 0 0.5rem;">
-                                PERIOD PREDICTIONS
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                            pred_cols = st.columns(len(fd["predictions"]))
-                            for i, (label, pred) in enumerate(
-                                zip(fd["future_labels"], fd["predictions"])
-                            ):
-                                with pred_cols[i]:
-                                    st.markdown(f"""
-                                    <div style="background:var(--bg-card);
-                                                border:1px solid rgba(46,204,113,0.2);
-                                                border-radius:8px;padding:0.8rem;
-                                                text-align:center;">
-                                        <div style="font-family:'DM Mono',monospace;
-                                                    font-size:0.6rem;color:#7A6230;
-                                                    margin-bottom:0.3rem;">
-                                            {label}
-                                        </div>
-                                        <div style="font-family:'Playfair Display',serif;
-                                                    font-size:1.1rem;color:#2ECC71;">
-                                            ₹{pred:,.0f}
-                                        </div>
-                                    </div>
-                                    """, unsafe_allow_html=True)
 
                 except Exception as e:
                     progress.empty()

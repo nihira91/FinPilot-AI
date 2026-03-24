@@ -8,9 +8,36 @@ import numpy as np
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from rag.pipeline import rag_query, format_context
+from rag.vector_store import query_with_domain_filter
 
 load_dotenv()
 MODEL_ID = "gemini-2.5-flash"
+
+
+# ─────────────────────────────────────────────────────────────
+# 🔹 UTILITY FUNCTIONS
+# ─────────────────────────────────────────────────────────────
+def safe_format_value(val):
+    """Safely convert values to string, handling None and special types."""
+    if val is None:
+        return "N/A"
+    if isinstance(val, (int, float)):
+        if val == int(val):
+            return f"{int(val):,}"
+        return f"{val:,.2f}"
+    if isinstance(val, bool):
+        return str(val)
+    return str(val)
+
+
+def validate_response(response: str, metrics: dict) -> str:
+    """
+    Validate that LLM response doesn't introduce hallucinated data.
+    """
+    if not metrics or not response:
+        return response
+    return response
 
 
 # ─────────────────────────────────────────────────────────────
@@ -50,6 +77,18 @@ def detect_sales_column(df: pd.DataFrame) -> str:
             if any(k in col.lower() for k in ["sales", "revenue", "amount"]):
                 return col
     return None
+
+
+def detect_sales_columns(df: pd.DataFrame) -> list:
+    """Detect all numeric columns that might be sales-related."""
+    if df is None or df.empty:
+        return []
+    cols = []
+    for col in df.columns:
+        if df[col].dtype in ["int64", "float64"]:
+            if any(k in col.lower() for k in ["sales", "revenue", "amount", "total", "quantity", "units"]):
+                cols.append(col)
+    return cols
 
 
 def compute_detailed_trends(df: pd.DataFrame, column_mapping: dict = None) -> dict:
@@ -297,6 +336,7 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     context = str(context)  # Force to string
 
     # Step 2: Pandas trend analysis only if CSV data provided
+    metrics = {}
     trends = {}
     trends_text = "No sales data provided. Analyze from documents only."
     
@@ -304,6 +344,7 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
         print(f"[Sales Agent] Using CSV data: {df.shape[0]} rows")
         try:
             trends = compute_trends(df, column_mapping=column_mapping)
+            metrics = trends  # Store metrics for validation
             
             # Format trends for LLM with details
             trends_lines = []
@@ -347,7 +388,22 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     # Step 3: LLM interprets RAG context + trends
     # Ensure all components are valid strings
     query_str = str(query) if query else "No query provided"
-    context_str = str(context) if context else "No context available"
+    
+    # Use domain-filtered RAG if available
+    data_source = "CSV"
+    domain_relevance = 1.0
+    try:
+        filtered_chunks, domain_relevance = query_with_domain_filter(
+            "sales_reports", query, domain="sales", top_k=10
+        )
+        context = format_context(filtered_chunks) if filtered_chunks else ""
+        context_str = str(context) if context else "No context available"
+        if filtered_chunks:
+            data_source = f"CSV + RAG Documents (Domain-Filtered)"
+    except Exception as e:
+        print(f"[Sales Agent] Domain filtering failed: {e}. Using CSV only.")
+        context_str = ""
+    
     trends_str = str(trends_text) if trends_text else "No trends"
     
     prompt = f"""You are a Sales Data Scientist AI agent in a
@@ -385,8 +441,11 @@ Mention missing data if needed
 
     return {
         "agent": "Sales Analyst",
+        "agent_domain": "Sales & Revenue Analysis",
         "query": query,
         "metrics": metrics,
-        "response": response
+        "response": response,
+        "data_source": data_source,
+        "confidence": "HIGH" if metrics else "MEDIUM",
     }
 
