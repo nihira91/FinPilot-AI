@@ -9,8 +9,8 @@ from agents.investment_strategist import run as investment_run
 from agents.financial_agent import run as financial_run
 from agents.sales_agent import run as sales_run
 from agents.cloud_agent import run as cloud_run
-from agents.visualization_agent import run as visualization_run
-from utils.visualization_helpers import detect_visualization_request, get_chart_type_suggestion
+from utils.chart_generator import create_breakdown_pie, create_category_bar, create_timeseries_line
+import json
 
 load_dotenv()
 
@@ -215,52 +215,95 @@ def cloud_node(state: AgentState):
 def visualization_node(state: AgentState):
     """
     Generate interactive charts from agent analysis results.
-    Runs conditionally when user requests visualization.
-    Handles both CSV data and PDF document analysis.
+    Combines metrics from multiple agents (financial + sales + investment).
     """
-    print("[Visualization Agent] Running...")
+    print("[Visualization] Generating charts...")
     
-    # Determine which agent's output to visualize
-    # Priority: Financial > Sales > Investment (works with both CSV and PDF)
-    full_result = None
-    source = None
+    charts = []
+    all_metrics = {}
+    sources = []
     
-    if state.get("financial_result"):
-        full_result = state.get("financial_result")
-        source = "Financial Agent"
-        print(f"[Visualization Agent] Using data from: {source}")
-        print(f"[Visualization Agent] Agent: {full_result.get('agent', 'Unknown')}")
-        print(f"[Visualization Agent] Data source: {full_result.get('data_source', 'Unknown')}")
-        if "metrics" in full_result:
-            print(f"[Visualization Agent] ✓ Found metrics with {len(full_result['metrics'])} items")
-        else:
-            print(f"[Visualization Agent] ⚠ No metrics key found in result")
-    elif state.get("sales_result"):
-        full_result = state.get("sales_result")
-        source = "Sales Agent"
-        print(f"[Visualization Agent] Using data from: {source}")
-    elif state.get("investment_result"):
-        full_result = state.get("investment_result")
-        source = "Investment Agent"
-        print(f"[Visualization Agent] Using data from: {source}")
+    # Collect metrics from all available agent results
+    if state.get("financial_result") and isinstance(state.get("financial_result"), dict):
+        financial_metrics = state.get("financial_result").get("metrics", {})
+        if financial_metrics:
+            all_metrics.update(financial_metrics)
+            sources.append("Financial")
+            print(f"[Visualization] ✓ Added {len(financial_metrics)} financial metrics")
     
-    if not full_result:
-        print("[Visualization Agent] No source data found in state")
-        print(f"[Visualization Agent] Available keys: {list(state.keys())}")
-        return {"visualization_output": {"charts": [], "error": "No agent result data available"}}
+    if state.get("sales_result") and isinstance(state.get("sales_result"), dict):
+        sales_metrics = state.get("sales_result").get("metrics", {})
+        if sales_metrics:
+            all_metrics.update(sales_metrics)
+            sources.append("Sales")
+            print(f"[Visualization] ✓ Added {len(sales_metrics)} sales metrics")
     
-    # Call visualization agent
-    chart_type = state.get("chart_type", "auto")
-    try:
-        result = visualization_run(
-            agent_response=full_result,
-            chart_type=chart_type,
-            query=state["query"]
-        )
-        return {"visualization_output": result}
-    except Exception as e:
-        print(f"[Visualization Agent] Error: {e}")
-        return {"visualization_output": {"charts": [], "error": str(e)}}
+    if state.get("investment_result") and isinstance(state.get("investment_result"), dict):
+        investment_metrics = state.get("investment_result").get("metrics", {})
+        if investment_metrics:
+            all_metrics.update(investment_metrics)
+            sources.append("Investment")
+            print(f"[Visualization] ✓ Added {len(investment_metrics)} investment metrics")
+    
+    source_text = ", ".join(sources) if sources else "Unknown"
+    print(f"[Visualization] Total metrics collected: {len(all_metrics)} from {source_text}")
+    
+    # Generate charts from all collected metrics
+    for key, value in all_metrics.items():
+        if value is None or not isinstance(value, dict):
+            continue
+        
+        try:
+            # Determine chart type and create
+            key_lower = key.lower()
+            
+            if any(x in key_lower for x in ["breakdown", "distribution", "split"]):
+                # Breakdown/pie chart
+                fig = create_breakdown_pie(value, title=key.replace("_", " ").title())
+                if fig:
+                    charts.append({
+                        "title": key.replace("_", " ").title(),
+                        "type": "pie",
+                        "plotly_json": fig.to_json()
+                    })
+                    print(f"[Visualization] ✓ Created pie chart: {key}")
+            
+            elif any(x in key_lower for x in ["trend", "monthly", "period", "time", "over"]):
+                # Time series/line chart
+                fig = create_timeseries_line(value, title=key.replace("_", " ").title())
+                if fig:
+                    charts.append({
+                        "title": key.replace("_", " ").title(),
+                        "type": "line",
+                        "plotly_json": fig.to_json()
+                    })
+                    print(f"[Visualization] ✓ Created line chart: {key}")
+            
+            else:
+                # Default to bar chart
+                fig = create_category_bar(value, title=key.replace("_", " ").title())
+                if fig:
+                    charts.append({
+                        "title": key.replace("_", " ").title(),
+                        "type": "bar",
+                        "plotly_json": fig.to_json()
+                    })
+                    print(f"[Visualization] ✓ Created bar chart: {key}")
+        
+        except Exception as e:
+            print(f"[Visualization] ✗ Error creating chart for {key}: {e}")
+            continue
+    
+    print(f"[Visualization] Generated {len(charts)} total charts")
+    
+    return {
+        "visualization_output": {
+            "charts": charts,
+            "count": len(charts),
+            "source": source_text
+        }
+    }
+
 
 
 # Multi Agent Node 

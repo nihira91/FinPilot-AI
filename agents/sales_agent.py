@@ -262,6 +262,7 @@ def compute_detailed_trends(df: pd.DataFrame, column_mapping: dict = None) -> di
 def compute_trends(df: pd.DataFrame, column_mapping: dict = None) -> dict:
     """
     Backward compatible wrapper using detailed trends computation.
+    Flattens nested dicts to make them chart-compatible.
     """
     detailed = compute_detailed_trends(df, column_mapping=column_mapping)
     
@@ -285,10 +286,25 @@ def compute_trends(df: pd.DataFrame, column_mapping: dict = None) -> dict:
     if "intercept" in detailed:
         simple["intercept"] = detailed["intercept"]
     
-    if "all_sales_columns" in detailed:
-        simple["sales_breakdown"] = detailed["all_sales_columns"]
-    if "period_breakdown" in detailed:
-        simple["period_breakdown"] = detailed["period_breakdown"]
+    # Flatten sales_columns for chart compatibility
+    if "all_sales_columns" in detailed and isinstance(detailed["all_sales_columns"], dict):
+        flattened_sales = {}
+        for col_name, col_data in detailed["all_sales_columns"].items():
+            if isinstance(col_data, dict) and "total" in col_data:
+                flattened_sales[col_name] = col_data["total"]
+            else:
+                flattened_sales[col_name] = col_data
+        simple["sales_breakdown"] = flattened_sales
+    
+    # Flatten period_breakdown for chart compatibility
+    if "period_breakdown" in detailed and isinstance(detailed["period_breakdown"], dict):
+        flattened_periods = {}
+        for period, period_data in detailed["period_breakdown"].items():
+            if isinstance(period_data, dict) and "total" in period_data:
+                flattened_periods[str(period)] = period_data["total"]
+            else:
+                flattened_periods[str(period)] = period_data
+        simple["period_breakdown"] = flattened_periods
     
     return simple
 

@@ -761,18 +761,9 @@ with tab1:
                 progress.progress(40)
 
                 try:
-                    # Detect visualization request (keyword + toggle)
-                    from utils.visualization_helpers import detect_visualization_request, get_chart_type_suggestion
-                    
-                    wants_viz_auto, suggested_chart_type = detect_visualization_request(query)
-                    request_visualization = visualize_toggled or wants_viz_auto
-                    
+                    # Simple visualization request: just use the checkbox toggle
                     graph  = build_graph()
-                    input_data = {"query": query, "request_visualization": request_visualization}
-                    
-                    # Set chart type if visualization requested
-                    if request_visualization:
-                        input_data["chart_type"] = suggested_chart_type or "auto"
+                    input_data = {"query": query, "request_visualization": visualize_toggled}
                     
                     if "financial_csv" in st.session_state:
                         input_data["financial_csv"] = st.session_state.financial_csv
