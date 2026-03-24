@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from rag.pipeline import rag_query, format_context
+from utils.forecasting import forecast_revenue, forecast_summary_text
 
 load_dotenv()
 
@@ -47,6 +48,47 @@ def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
         )
     )
     return response.text.strip()
+
+
+def check_if_forecast_requested(query: str) -> bool:
+    """
+    Check if user is asking for forecast/prediction.
+    Returns True if forecast-related keywords detected.
+    """
+    forecast_keywords = [
+        'forecast', 'predict', 'projection', 'future',
+        'next quarter', 'next month', 'next period', 'next year',
+        'trend', 'growth rate', 'expected', 'estimate'
+    ]
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in forecast_keywords)
+
+
+def validate_response_against_metrics(response: str, metrics: dict, query: str = "") -> str:
+    """
+    Validate that LLM response doesn't introduce hallucinated data.
+    Ensures only computed metrics are used.
+    """
+    if not metrics or not response:
+        return response
+    
+    hallucination_warnings = []
+    
+    # If no metrics were computed but response claims specific numbers
+    has_numeric_metrics = any(isinstance(v, (int, float)) and v > 0 for v in metrics.values())
+    
+    if not has_numeric_metrics:
+        if any(keyword in response.lower() for keyword in ['$', 'revenue', 'profit', 'expenses', 'costs', 'income']):
+            hallucination_warnings.append("\n⚠️ WARNING: Financial numbers claimed but no CSV metrics were computed. Using document knowledge only.")
+    
+    # Check if forecast is being included when not requested
+    if "forecast" in response.lower() and not check_if_forecast_requested(query):
+        hallucination_warnings.append("\n⚠️ NOTE: Forecast mentioned but not requested. Forecast only requested by user.")
+    
+    if hallucination_warnings:
+        return response + "\n" + "".join(hallucination_warnings)
+    
+    return response
 
 
 def detect_cost_columns(df: pd.DataFrame) -> list:
@@ -177,7 +219,7 @@ def compute_metrics(df: pd.DataFrame, column_mapping: dict = None) -> dict:
     return simple
 
 
-def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dict:
+def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None, forecast_column: str = None, model_type: str = "polynomial") -> dict:
     """
     Main entry point for Financial Analyst Agent.
     Called by Orchestrator whenever financial analysis is needed.
@@ -186,12 +228,15 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
         query : question from Orchestrator
         df    : optional DataFrame with financial data
         column_mapping : dict mapping {"revenue": col_name, "cogs": col_name, "expenses": col_name}
+        forecast_column : specific column to forecast (auto-detected if None)
+        model_type : which forecasting model to use ("polynomial", "exponential")
 
     Returns:
         {
           "agent"    : "Financial Analyst",
           "query"    : original query,
           "metrics"  : computed financial metrics,
+          "forecast_data": ML forecast data,
           "response" : LLM full analysis
         }
     """
@@ -205,21 +250,30 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     
     print(f"\n[Financial Agent] Query received: {query}")
 
-    # Step 1: RAG retrieval from financial_reports collection
-    try:
-        chunks  = rag_query("financial_reports", query, top_k=5)
-    except Exception as e:
-        print(f"[Financial Agent] RAG query error: {str(e)}")
-        chunks = []
+    # Step 1: Check if CSV data provided FIRST (takes absolute priority)
+    has_csv_data = df is not None and not df.empty
+    print(f"[Financial Agent] CSV data available: {has_csv_data}")
+
+    # Step 2: ONLY retrieve RAG if NO CSV data is provided
+    # This prevents stale ChromaDB data from interfering with fresh uploads
+    context = "No document context - CSV data is primary source."
+    chunks = []
     
-    context = format_context(chunks) if chunks else "No document context available."
+    if not has_csv_data:
+        # Only use RAG if no CSV data provided
+        print(f"[Financial Agent] No CSV data. Attempting RAG retrieval...")
+        try:
+            chunks = rag_query("financial_reports", query, top_k=5)
+            context = format_context(chunks) if chunks else "No document context available."
+        except Exception as e:
+            print(f"[Financial Agent] RAG query error: {str(e)}")
+            context = "No document context available."
+    else:
+        print(f"[Financial Agent] CSV data provided. Skipping RAG to avoid stale data interference.")
     
-    # Ensure context is a valid string
-    if not context or context is None:
-        context = "No document context available."
     context = str(context)  # Force to string
 
-    # Step 2: Pandas analysis only if CSV data provided
+    # Step 3: Pandas analysis - compute metrics from CSV if provided
     metrics = {}
     metrics_text = "No financial data provided. Analyze from documents only."
     
@@ -274,46 +328,108 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
         metrics = {}
         metrics_text = "No financial data provided. Analyze from documents only."
 
-    # Step 3: LLM interprets RAG context + metrics
+    # Step 3: Revenue Forecast (ONLY if user requests it)
+    forecast_text = ""
+    forecast_data = None
+    should_forecast = check_if_forecast_requested(query)
+    
+    if should_forecast and df is not None and not df.empty:
+        try:
+            print(f"[Financial Agent] User requested forecast. Attempting forecast for column: {forecast_column}")
+            print(f"[Financial Agent] Using model: {model_type}")
+            
+            forecast_data = forecast_revenue(df, periods=4, column_to_forecast=forecast_column, model_type=model_type)
+            
+            if "error" in forecast_data:
+                print(f"[Financial Agent] Forecast error: {forecast_data['error']}")
+                forecast_text = f"Forecast note: {forecast_data['error']}"
+            else:
+                forecast_text = forecast_summary_text(forecast_data)
+                print(f"[Financial Agent] Forecast successful - accuracy: {forecast_data.get('accuracy')}%")
+        except Exception as e:
+            print(f"[Financial Agent] Exception computing forecast: {str(e)}")
+            forecast_text = f"Forecast unavailable: {str(e)}"
+    else:
+        if should_forecast:
+            forecast_text = "Forecast requested but no CSV data available."
+        else:
+            forecast_text = "No forecast requested by user."
+    
+    # Step 4: LLM interprets metrics ONLY (CSV takes priority over RAG)
     # Ensure all components are valid strings
     query_str = str(query) if query else "No query provided"
-    context_str = str(context) if context else "No context available"
-    metrics_str = str(metrics_text) if metrics_text else "No metrics"
     
-    prompt = f"""You are a Financial Analyst AI agent in a
-multi-agent financial intelligence system.
+    # If CSV data was provided, use ONLY that - don't confuse LLM with stale RAG context
+    if has_csv_data:
+        # CSV data is primary source - NEVER mix with RAG context
+        context_instruction = "🔴 CRITICAL: IGNORE ANY GENERAL KNOWLEDGE. Use ONLY the computed metrics below. Do NOT reference documents or external knowledge."
+        context_str = ""  # Suppress RAG context entirely when CSV provided
+        print(f"[Financial Agent] Using CSV-only mode. Suppressing all external context.")
+    else:
+        # No CSV data - use RAG context
+        context_str = str(context) if context else "No context available"
+        context_instruction = "Use the retrieved context below to answer. Do NOT use external knowledge not in the context."
+        print(f"[Financial Agent] Using RAG-only mode. Using document context.")
+    
+    metrics_str = str(metrics_text) if metrics_text else "No metrics"
+    forecast_str = str(forecast_text) if forecast_text else "No forecast available"
+    
+    prompt = f"""You are a Financial Analyst AI agent in a multi-agent financial intelligence system.
 
-RETRIEVED CONTEXT FROM DOCUMENTS:
-{context_str}
+{context_instruction}
 
-COMPUTED FINANCIAL METRICS:
+MANDATORY RULES - BREAKING THESE CAUSES SYSTEM FAILURE:
+1. NEVER use your pre-trained knowledge or external data sources
+2. NEVER reference competitor data, industry benchmarks, or market reports
+3. NEVER make up numbers, trends, or calculations NOT in the metrics
+4. If data is missing, state: "Data not available" - do NOT assume or estimate
+5. EVERY number must be directly quoted from the COMPUTED METRICS section below
+6. If query asks for something not in metrics, state "Cannot answer - this data was not provided"
+
+{"RETRIEVED CONTEXT FROM DOCUMENTS (SUPPLEMENTARY ONLY):" + chr(10) + context_str + chr(10) if context_str else ""}
+
+COMPUTED FINANCIAL METRICS FROM CSV:
 {metrics_str}
 
-QUERY: {query_str}
+REVENUE FORECAST (ML Model):
+{forecast_str}
+
+USER QUERY:
+{query_str}
 
 Respond using EXACTLY this structure:
+
 ## Financial Summary
-[2-3 sentence overview]
+[2-3 sentences based ONLY on the metrics above. If metrics are absent, state that.]
 
 ## Key Metrics
-[Bullet list of important numbers]
+[Bullet list with EXACT numbers ONLY from "COMPUTED FINANCIAL METRICS" section]
+
+## Data Limitations
+[List what data is NOT available that would be needed to fully answer the query]
 
 ## Budget Forecast
-[Predicted revenue, expenses, profit trends]
+[Only include if forecast data shows numbers. If empty, state "Forecast data not available"]
 
 ## Recommendations
-[Numbered list of specific actions]
+[Numbered list based ONLY on metrics shown. If insufficient data, state "Recommendations not possible with available data"]
 
 ## Source References
-[List of documents used]"""
+[State "Analysis based on CSV data only" or list documents]
+
+⚠️ CRITICAL: Every single number in your response must appear in the metrics section above. If not, your answer is incorrect."""
 
     response = call_gemini(prompt)
+    
+    # Validate response against metrics to catch hallucination
+    response = validate_response_against_metrics(response, metrics, query)
     print(f"[Financial Agent] Analysis complete.")
 
     return {
         "agent":    "Financial Analyst",
         "query":    query,
         "metrics":  metrics,
+        "forecast_data": forecast_data,
         "response": response,
     }
 

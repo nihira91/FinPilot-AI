@@ -11,6 +11,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 from rag.pipeline import build_collection, COLLECTIONS
 from orchestrator.orchestrator_agent import build_graph
+from utils.forecasting import forecast_chart
 
 load_dotenv()
 
@@ -555,6 +556,37 @@ with st.sidebar:
                     if mapping:
                         st.session_state.financial_column_mapping = mapping
                         st.caption(f"✓ Mapping: {mapping}")
+                
+                with st.expander("Forecast Settings", expanded=False):
+                    forecast_col_options = ["-- Auto-detect --"] + list(df.columns)
+                    forecast_col = st.selectbox(
+                        "Column to forecast:",
+                        forecast_col_options,
+                        key="forecast_column_select",
+                        help="Select which column to forecast. Auto-detect will choose the best option automatically."
+                    )
+                    
+                    if forecast_col != "-- Auto-detect --":
+                        st.session_state.forecast_column = forecast_col
+                        st.caption(f"✓ Forecasting: {forecast_col}")
+                    else:
+                        st.session_state.forecast_column = None
+                        st.caption("📊 Using smart auto-detection")
+                    
+                    # ── Model selection ──
+                    model_options = {
+                        "Polynomial Regression": "polynomial",
+                        "Exponential Smoothing": "exponential"
+                    }
+                    model_display = st.selectbox(
+                        "Forecasting Model:",
+                        list(model_options.keys()),
+                        index=0,
+                        key="model_select",
+                        help="Choose ML model for forecasting. Polynomial catches trends, Exponential weights recent data."
+                    )
+                    st.session_state.model_type = model_options[model_display]
+                    st.caption(f"🤖 Model: {model_display}")
                     
             elif collection == "sales_reports" and "sales_csv" in st.session_state:
                 df = st.session_state.sales_csv
@@ -658,6 +690,10 @@ with tab1:
                         input_data["financial_column_mapping"] = st.session_state.financial_column_mapping
                     if "sales_column_mapping" in st.session_state:
                         input_data["sales_column_mapping"] = st.session_state.sales_column_mapping
+                    if "forecast_column" in st.session_state:
+                        input_data["forecast_column"] = st.session_state.forecast_column
+                    if "model_type" in st.session_state:
+                        input_data["model_type"] = st.session_state.model_type
                     result = graph.invoke(input_data)
 
                     progress.progress(85)
@@ -693,6 +729,103 @@ with tab1:
                         ROUTED → {agents_str}
                     </div>
                     """, unsafe_allow_html=True)
+
+                    # ── Forecast Chart Display ──
+                    if result.get("forecast_data") and "financial_csv" in st.session_state:
+                        fin_df = st.session_state.financial_csv
+                        
+                        st.markdown("""
+                        <div style="display:flex;align-items:center;
+                                    gap:10px;margin:1.5rem 0 1rem;">
+                            <div style="height:1px;flex:1;background:linear-gradient(
+                                90deg,transparent,rgba(201,168,76,0.3));"></div>
+                            <span style="font-family:'DM Mono',monospace;
+                                         font-size:0.65rem;color:#7A6230;
+                                         letter-spacing:0.2em;">
+                                REVENUE FORECAST
+                            </span>
+                            <div style="height:1px;flex:1;background:linear-gradient(
+                                90deg,rgba(201,168,76,0.3),transparent);"></div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # ── Forecast Metrics ──────────────────────────────────
+                        fd = result["forecast_data"]
+                        
+                        if "error" not in fd:
+                            # Show model info in a small section
+                            model_name = fd.get("model_name", "Unknown Model")
+                            st.caption(f"🤖 Using: {model_name}")
+                            
+                            m1, m2, m3, m4 = st.columns(4)
+                            
+                            with m1:
+                                st.metric(
+                                    "Model Accuracy",
+                                    f"{fd['accuracy']}%",
+                                    delta = "ML Forecast"
+                                )
+                            with m2:
+                                st.metric(
+                                    "Last Actual",
+                                    f"₹{fd['last_actual']:,.0f}",
+                                    delta = "Current"
+                                )
+                            with m3:
+                                st.metric(
+                                    "Next Period",
+                                    f"₹{fd['next_predicted']:,.0f}",
+                                    delta = f"{fd['growth_rate']:+.1f}% growth",
+                                    delta_color = "normal" if fd['growth_rate'] > 0 
+                                                  else "inverse"
+                                )
+                            with m4:
+                                trend = "📈 Upward" if fd['growth_rate'] > 0 \
+                                        else "📉 Downward"
+                                st.metric(
+                                    "Trend",
+                                    trend,
+                                    delta = f"{fd['growth_rate']:+.1f}%",
+                                    delta_color = "normal" if fd['growth_rate'] > 0 
+                                                  else "inverse"
+                                )
+
+                            # ── Forecast Chart ────────────────────────────────
+                            fig = forecast_chart(fin_df, fd)
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True)
+
+                            # ── Period Predictions Table ──────────────────────
+                            st.markdown("""
+                            <div style="font-family:'DM Mono',monospace;
+                                        font-size:0.65rem;color:#7A6230;
+                                        letter-spacing:0.2em;
+                                        margin:1rem 0 0.5rem;">
+                                PERIOD PREDICTIONS
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            pred_cols = st.columns(len(fd["predictions"]))
+                            for i, (label, pred) in enumerate(
+                                zip(fd["future_labels"], fd["predictions"])
+                            ):
+                                with pred_cols[i]:
+                                    st.markdown(f"""
+                                    <div style="background:var(--bg-card);
+                                                border:1px solid rgba(46,204,113,0.2);
+                                                border-radius:8px;padding:0.8rem;
+                                                text-align:center;">
+                                        <div style="font-family:'DM Mono',monospace;
+                                                    font-size:0.6rem;color:#7A6230;
+                                                    margin-bottom:0.3rem;">
+                                            {label}
+                                        </div>
+                                        <div style="font-family:'Playfair Display',serif;
+                                                    font-size:1.1rem;color:#2ECC71;">
+                                            ₹{pred:,.0f}
+                                        </div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
 
                 except Exception as e:
                     progress.empty()

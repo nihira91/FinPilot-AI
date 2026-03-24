@@ -28,7 +28,7 @@ def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
     return response.text.strip()
 
 
-# ── Agent State ───────────────────────────────────────────
+#  Agent State 
 from typing import Optional
 import pandas as pd
 
@@ -40,6 +40,9 @@ class AgentState(TypedDict, total=False):
     sales_csv: Optional[pd.DataFrame]
     financial_column_mapping: Optional[dict]
     sales_column_mapping: Optional[dict]
+    forecast_column: Optional[str]
+    forecast_data: Optional[dict]
+    model_type: Optional[str]
     investment_output: str
     financial_output: str
     sales_output: str
@@ -47,11 +50,11 @@ class AgentState(TypedDict, total=False):
     final_output: str
 
 
-# ── Orchestrator Node ─────────────────────────────────────
+# Orchestrator Node 
 def orchestrator_node(state: AgentState):
     query = state["query"]
     
-    # ── Ensure query is valid string ──
+    # Ensure query is valid string 
     if query is None:
         raise ValueError("Query is None - should not reach here")
     query = str(query).strip()
@@ -80,12 +83,12 @@ Example: financial,investment"""
     valid  = ["financial", "sales", "investment", "cloud"]
     routes = [r.strip() for r in response.split(",") if r.strip() in valid]
 
-    # ── Ambiguous fallback ────────────────────────────────
+    #  Ambiguous fallback 
     if not routes:
         print("[Orchestrator] Ambiguous query — defaulting to financial,sales,investment")
         routes = ["financial", "sales", "investment"]
 
-    # ── Safety keyword check ──────────────────────────────
+    #Safety keyword check 
     query_lower = query.lower()
 
     sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal"]
@@ -110,7 +113,7 @@ Example: financial,investment"""
 
   
 
-# ── Router Function ───────────────────────────────────────
+#  Router Function 
 def route_query(state: AgentState) -> str:
     routes = state.get("routes", [])
     route  = state.get("route", "financial")
@@ -122,7 +125,7 @@ def route_query(state: AgentState) -> str:
     return route
 
 
-# ── Single Agent Nodes ────────────────────────────────────
+# Single Agent Nodes
 def investment_node(state: AgentState):
     print("[Investment Agent] Running...")
     result = investment_run(state["query"])
@@ -133,8 +136,13 @@ def financial_node(state: AgentState):
     print("[Financial Agent] Running...")
     csv_data = state.get("financial_csv")
     column_mapping = state.get("financial_column_mapping")
-    result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
-    return {"financial_output": result["response"]}
+    forecast_column = state.get("forecast_column")
+    model_type = state.get("model_type", "polynomial")
+    result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping, forecast_column=forecast_column, model_type=model_type)
+    return {
+        "financial_output": result["response"],
+        "forecast_data": result.get("forecast_data")
+    }
 
 
 def sales_node(state: AgentState):
@@ -151,7 +159,7 @@ def cloud_node(state: AgentState):
     return {"cloud_output": result["response"]}
 
 
-# ── Multi Agent Node (only required agents) ───────────────
+# Multi Agent Node 
 def multi_agent_node(state: AgentState):
     routes  = state.get("routes", [])
     updates = {}
@@ -162,8 +170,12 @@ def multi_agent_node(state: AgentState):
         print("[Financial Agent] Running...")
         csv_data = state.get("financial_csv")
         column_mapping = state.get("financial_column_mapping")
-        result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping)
+        forecast_column = state.get("forecast_column")
+        model_type = state.get("model_type", "polynomial")
+        result = financial_run(state["query"], df=csv_data, column_mapping=column_mapping, forecast_column=forecast_column, model_type=model_type)
         updates["financial_output"] = result["response"]
+        if result.get("forecast_data"):
+            updates["forecast_data"] = result["forecast_data"]
 
     if "sales" in routes:
         print("[Sales Agent] Running...")
@@ -194,7 +206,7 @@ Respond with:
     return updates
 
 
-# ── Aggregator Node ───────────────────────────────────────
+#  Aggregator Node 
 def aggregator_node(state: AgentState):
     print("[Aggregator] Combining results...")
 
@@ -221,10 +233,16 @@ Provide:
 ## Next Steps"""
 
     final = call_gemini(summary_prompt)
-    return {"final_output": final}
+    result = {"final_output": final}
+    
+    # Pass through forecast_data if it exists 
+    if state.get("forecast_data"):
+        result["forecast_data"] = state["forecast_data"]
+    
+    return result
 
 
-# ── Build Graph ───────────────────────────────────────────
+# Build Graph 
 def build_graph():
     graph = StateGraph(AgentState)
 

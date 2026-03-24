@@ -23,7 +23,7 @@ def chunk_documents(documents: dict) -> list:
             all_chunks.append({
                 "text":     chunk,
                 "source":   filename,
-                # chunk_id must be a UNIQUE string — ChromaDB uses it as a primary key
+                # chunk_id must be a UNIQUE string
                 "chunk_id": f"{filename}_chunk_{i}"
             })
 

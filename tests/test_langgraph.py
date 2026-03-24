@@ -21,6 +21,6 @@ graph.add_edge("orchestrator", END)
 # Compile and run
 app = graph.compile()
 result = app.invoke({
-    "query": "Analyse our Q3 performance"
+    "query": "Analyse our performance"
 })
 print(result)
