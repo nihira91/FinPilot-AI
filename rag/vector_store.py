@@ -1,18 +1,29 @@
 
+import os
 import chromadb
 from chromadb.config import Settings
 
 from rag.embedder import embed_texts, embed_query
 
-_chroma_client = chromadb.PersistentClient(
-    path="./chroma_store",
-    settings=Settings(anonymized_telemetry=False)
-)
+# By default, use in-memory for all collections except routing_rules.
+# Routing rules are stored persistently to preserve routing behavior across app restarts.
+CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_store")
+
+
+def _get_chroma_client(collection_name: str):
+    if collection_name == "routing_rules":
+        return chromadb.PersistentClient(
+            path=CHROMA_PATH,
+            settings=Settings(anonymized_telemetry=False)
+        )
+    return chromadb.Client(
+        settings=Settings(anonymized_telemetry=False)
+    )
 
 
 def get_or_create_collection(collection_name: str):
-    
-    collection = _chroma_client.get_or_create_collection(
+    client = _get_chroma_client(collection_name)
+    collection = client.get_or_create_collection(
         name=collection_name,
         metadata={"hnsw:space": "cosine"}   # cosine similarity for semantic search
     )

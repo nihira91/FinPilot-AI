@@ -484,6 +484,7 @@ with st.sidebar:
     }
 
     uploaded_any = False
+    collections_to_rebuild = []
     import pandas as pd
 
     for collection, (icon, label) in collection_labels.items():
@@ -508,6 +509,7 @@ with st.sidebar:
                 folder = COLLECTIONS[collection]
                 os.makedirs(folder, exist_ok=True)
                 
+                has_pdf = False
                 for uploaded_file in uploaded_files:
                     # Handle CSV files
                     if uploaded_file.name.endswith(".csv"):
@@ -526,6 +528,11 @@ with st.sidebar:
                         with open(save_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         st.caption(f"✓ {uploaded_file.name} saved")
+                        has_pdf = True
+                
+                # Track collections with new PDFs to rebuild embeddings
+                if has_pdf and collection not in collections_to_rebuild:
+                    collections_to_rebuild.append(collection)
                 
                 uploaded_any = True
             
@@ -601,6 +608,29 @@ with st.sidebar:
                     if sales_col != "-- Skip --":
                         st.session_state.sales_column_mapping = {"sales": sales_col}
                         st.caption(f"✓ Mapping: sales → {sales_col}")
+
+    # ── Build Embeddings for New PDFs ──────────────────────────
+    if collections_to_rebuild:
+        st.markdown("---")
+        st.markdown('<div class="sidebar-section-title">Building Embeddings</div>', unsafe_allow_html=True)
+
+        with st.spinner("🔄 Creating embeddings for uploaded documents..."):
+            for collection in collections_to_rebuild:
+                try:
+                    build_collection(collection)
+                    st.info(f"✓ {collection}: embeddings created")
+                except Exception as e:
+                    st.error(f"✗ {collection}: {str(e)}")
+
+    # ── Always ensure routing rules collection exists on disk (persistent) 
+    try:
+        routing_folder = COLLECTIONS.get("routing_rules")
+        if routing_folder and os.path.isdir(routing_folder):
+            pdf_files = [f for f in os.listdir(routing_folder) if f.lower().endswith('.pdf')]
+            if pdf_files:
+                build_collection("routing_rules")
+    except Exception as e:
+        st.warning(f"Routing rules embedding check failed: {str(e)}")
 
     st.markdown("---")
 
@@ -892,31 +922,36 @@ with tab2:
         from chromadb.config import Settings
 
         chroma_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_store")
+        CHROMA_PERSISTENT = os.getenv("CHROMA_PERSISTENT", "0") in ["1", "true", "True"]
 
-        if not os.path.exists(chroma_path):
-            st.warning("chroma_store/ not found. Upload documents via sidebar first.")
-        else:
-            client = chromadb.PersistentClient(
-                path=chroma_path,
-                settings=Settings(anonymized_telemetry=False)
-            )
-            metric_cols = st.columns(5)
-            collections = [
-                "financial_reports",
-                "sales_reports",
-                "investment_reports",
-                "cloud_docs"
-            ]
-            for i, name in enumerate(collections):
-                with metric_cols[i]:
-                    try:
-                        col   = client.get_collection(name)
-                        count = col.count()
-                        label = name.replace("_", " ").title()
-                        st.metric(label, f"{count}", delta="chunks indexed")
-                    except:
-                        label = name.replace("_", " ").title()
-                        st.metric(label, "—", delta="empty")
+        if not CHROMA_PERSISTENT and not os.path.exists(chroma_path):
+            # In-memory mode does not require a folder; just show existing memory metrics (may be 0 until update).
+            pass
+
+        if CHROMA_PERSISTENT and not os.path.exists(chroma_path):
+            st.warning("chroma_store/ not found. Upload documents via sidebar first or set CHROMA_PERSISTENT=0.")
+
+        client = chromadb.Client(settings=Settings(anonymized_telemetry=False)) if not CHROMA_PERSISTENT else chromadb.PersistentClient(
+            path=chroma_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        metric_cols = st.columns(6)
+        collections = [
+            "financial_reports",
+            "sales_reports",
+            "investment_reports",
+            "cloud_docs"
+        ]
+        for i, name in enumerate(collections):
+            with metric_cols[i]:
+                try:
+                    col   = client.get_collection(name)
+                    count = col.count()
+                    label = name.replace("_", " ").title()
+                    st.metric(label, f"{count}", delta="chunks indexed")
+                except Exception:
+                    label = name.replace("_", " ").title()
+                    st.metric(label, "—", delta="empty")
     except Exception as e:
         st.error(f"ChromaDB error: {str(e)}")
 
