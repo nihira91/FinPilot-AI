@@ -1,467 +1,499 @@
-
-
 import os
-import json
-import re
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from rag.pipeline import rag_query, format_context
-from rag.vector_store import query_with_domain_filter
 
 load_dotenv()
 MODEL_ID = "gemini-2.5-flash"
 
+# Try importing visualization - optional feature
+try:
+    from utils.chart_generator import create_timeseries_line, create_category_bar
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
 
-# ─────────────────────────────────────────────────────────────
-# 🔹 UTILITY FUNCTIONS
-# ─────────────────────────────────────────────────────────────
+
+CHART_INTENT_KEYWORDS = {
+    "region": [
+        "region", "location", "area", "territory", "zone", "state", "city",
+        "by region", "region-wise", "regional", "across region", "geographic",
+        "where", "by location", "breakdown by location"
+    ],
+    "product": [
+        "product", "category", "item", "what", "which product", "sku",
+        "by product", "product-wise", "type", "service", "category-wise",
+        "product performance", "product breakdown", "category analysis"
+    ],
+    "trend": [
+        "trend", "month", "time", "over time", "pattern", "temporal",
+        "monthly", "time-series", "when", "period", "weekly", "quarterly",
+        "forecast", "growth", "trajectory", "evolution", "progression"
+    ]
+}
+
+
+def detect_chart_intent(query: str) -> str:
+    """Detect chart intent from query using semantic keywords."""
+    query_lower = query.lower()
+    for intent, keywords in CHART_INTENT_KEYWORDS.items():
+        if any(kw in query_lower for kw in keywords):
+            print(f"[Sales Agent] Chart intent detected: {intent}")
+            return intent
+    return "default"
+
+
 def safe_format_value(val):
-    """Safely convert values to string, handling None and special types."""
     if val is None:
         return "N/A"
     if isinstance(val, (int, float)):
-        if val == int(val):
-            return f"{int(val):,}"
         return f"{val:,.2f}"
-    if isinstance(val, bool):
-        return str(val)
     return str(val)
 
 
 def validate_response(response: str, metrics: dict) -> str:
-    """
-    Validate that LLM response doesn't introduce hallucinated data.
-    """
+    """Prevent hallucinated values."""
     if not metrics or not response:
         return response
+    import re
+    fake_growth = re.findall(r"\d+\.?\d*%", response)
+    for g in fake_growth:
+        num = float(g.replace("%", ""))
+        if num > 100:
+            response = response.replace(g, "Not Available")
     return response
 
 
-# ─────────────────────────────────────────────────────────────
-# 🔹 GEMINI CALL
-# ─────────────────────────────────────────────────────────────
-def call_gemini(prompt: str) -> str:
+def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     response = client.models.generate_content(
         model=MODEL_ID,
         contents=prompt,
         config=types.GenerateContentConfig(
-            temperature=0.1,  # LOW = less hallucination
-            max_output_tokens=4096,
+            temperature=0.0,
+            max_output_tokens=max_tokens,
         )
     )
     return response.text.strip()
 
 
-# ─────────────────────────────────────────────────────────────
-# 🔹 FORECAST CHECK
-# ─────────────────────────────────────────────────────────────
-def is_forecast_query(query: str) -> bool:
-    forecast_keywords = [
-        "forecast", "predict", "prediction",
-        "next month", "next quarter", "future"
+def parse_month_flexible(date_str: str):
+    """
+    Try multiple date formats to parse month string.
+    Handles: Jan-2022, Jan-22, January-2022, 2022-01, 01/2022, Jan 2022
+    """
+    if not date_str or pd.isna(date_str):
+        return pd.NaT
+
+    date_str = str(date_str).strip()
+
+    formats = [
+        "%b-%Y",   # Jan-2022 ← main format
+        "%b-%y",   # Jan-22
+        "%B-%Y",   # January-2022
+        "%B-%y",   # January-22
+        "%Y-%m",   # 2022-01
+        "%m/%Y",   # 01/2022
+        "%b %Y",   # Jan 2022
+        "%B %Y",   # January 2022
+        "%m-%Y",   # 01-2022
     ]
-    q = query.lower()
-    return any(k in q for k in forecast_keywords)
+
+    for fmt in formats:
+        try:
+            return pd.to_datetime(date_str, format=fmt)
+        except:
+            continue
+
+    # Last resort — pandas auto-detect
+    try:
+        return pd.to_datetime(date_str, infer_datetime_format=True)
+    except:
+        return pd.NaT
 
 
-# ─────────────────────────────────────────────────────────────
-# 🔹 COLUMN DETECTION
-# ─────────────────────────────────────────────────────────────
-def detect_sales_column(df: pd.DataFrame) -> str:
+def detect_sales_column(df, column_mapping=None):
+    """
+    Detect the sales column using multiple strategies.
+    """
+    # Strategy 1: Use provided column mapping
+    if column_mapping and "sales" in column_mapping:
+        col = column_mapping["sales"]
+        if col in df.columns:
+            print(f"[Sales Agent] Column mapping match: {col}")
+            return col
+
+    # Strategy 2: Exact match first (most reliable)
+    exact_matches = [
+        "sales_amount", "sales", "revenue",
+        "total_sales", "amount", "income",
+        "earnings", "value", "total_revenue",
+        "net_sales", "gross_sales"
+    ]
+    for exact in exact_matches:
+        if exact in df.columns:
+            if pd.to_numeric(df[exact], errors="coerce").notna().sum() > 0:
+                print(f"[Sales Agent] Exact match: {exact}")
+                return exact
+
+    # Strategy 3: Keyword search in column names
+    keywords = [
+        "sales", "revenue", "amount",
+        "income", "earnings", "total", "value"
+    ]
     for col in df.columns:
-        if df[col].dtype in ["int64", "float64"]:
-            if any(k in col.lower() for k in ["sales", "revenue", "amount"]):
+        col_lower = col.lower()
+        if any(k in col_lower for k in keywords):
+            if df[col].dtype in ["int64", "float64", "Int64", "Float64"]:
+                print(f"[Sales Agent] Keyword match: {col}")
                 return col
+
+    # Strategy 4: Only one numeric column
+    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    if len(numeric_cols) == 1:
+        print(f"[Sales Agent] Only one numeric column: {numeric_cols[0]}")
+        return numeric_cols[0]
+
+    # Strategy 5: First numeric column
+    if numeric_cols:
+        print(f"[Sales Agent] Using first numeric column: {numeric_cols[0]}")
+        return numeric_cols[0]
+
     return None
 
 
-def detect_sales_columns(df: pd.DataFrame) -> list:
-    """Detect all numeric columns that might be sales-related."""
+def compute_trends(df: pd.DataFrame, column_mapping: dict = None):
     if df is None or df.empty:
-        return []
-    cols = []
-    for col in df.columns:
-        if df[col].dtype in ["int64", "float64"]:
-            if any(k in col.lower() for k in ["sales", "revenue", "amount", "total", "quantity", "units"]):
-                cols.append(col)
-    return cols
+        return {"error": "No data"}
 
+    df = df.copy()
 
-def compute_detailed_trends(df: pd.DataFrame, column_mapping: dict = None) -> dict:
-    """
-    Compute comprehensive sales trends with auto-detection of sales columns.
-    Handles dataset schema with month/product/region/sales_amount/units_sold etc.
-    """
+    sales_col = detect_sales_column(df, column_mapping)
+    if not sales_col:
+        print(f"[Sales Agent] Available columns: {df.columns.tolist()}")
+        return {"error": f"No sales column found. Available: {df.columns.tolist()}"}
+
+    print(f"[Sales Agent] Using sales column: {sales_col}")
+
+    df[sales_col] = pd.to_numeric(df[sales_col], errors="coerce")
+    series = df[sales_col].dropna()
+
+    if series.empty:
+        return {"error": "Invalid sales data — all values are null"}
+
     trends = {}
 
-    if df is None or df.empty:
-        return {"error": "No sales data available"}
-
-    if column_mapping is None:
-        column_mapping = {}
-
-    # Detect primary numbers
-    sales_col = column_mapping.get("sales", None)
-    candidates = ["sales_amount", "sales", "revenue", "amount"]
-    if sales_col is None:
-        sales_col = next((c for c in candidates if c in df.columns), None)
-
-    if sales_col is None:
-        detected = detect_sales_columns(df)
-        if detected:
-            sales_col = detected[0]
-        else:
-            return {"error": "No sales/revenue columns found"}
-
-    # Ensure numeric and handle non-numeric safely
-    df = df.copy()
-    df[sales_col] = pd.to_numeric(df[sales_col], errors="coerce")
-    sales_series = df[sales_col].dropna()
-
-    if sales_series.empty:
-        return {"error": f"Sales column '{sales_col}' has no numeric values"}
-
-    trends["primary_metric"] = sales_col
-    trends["count"] = int(sales_series.size)
-    trends["mean"] = float(sales_series.mean())
-    trends["median"] = float(sales_series.median())
-    trends["std"] = float(sales_series.std(ddof=0))
-    trends["min"] = float(sales_series.min())
-    trends["max"] = float(sales_series.max())
-    trends["total"] = float(sales_series.sum())
-
-    # Period trend using month/date if available
-    period_col = column_mapping.get("period", None)
-    if period_col is None:
-        for option in ["month", "date", "period"]:
-            if option in df.columns:
-                period_col = option
-                break
-
-    if period_col in df.columns:
-        try:
-            df[period_col + "__parsed"] = pd.to_datetime(df[period_col], errors="coerce")
-            if df[period_col + "__parsed"].notna().any():
-                growth_frame = df.dropna(subset=[period_col + "__parsed", sales_col])
-                growth_frame = growth_frame.sort_values(period_col + "__parsed")
-                if not growth_frame.empty:
-                    first_val = pd.to_numeric(growth_frame[sales_col], errors="coerce").iloc[0]
-                    last_val = pd.to_numeric(growth_frame[sales_col], errors="coerce").iloc[-1]
-                    trends["period_growth_rate"] = float((last_val - first_val) / max(abs(first_val), 1e-9))
-                    trends["period_growth_percent"] = float(trends["period_growth_rate"] * 100)
-                    # monthly breakdown
-                    by_period = growth_frame.groupby(growth_frame[period_col + "__parsed"].dt.to_period("M"))[sales_col].agg(["sum", "mean", "count"])
-                    trends["period_breakdown"] = {str(idx): {"total": float(r["sum"]), "average": float(r["mean"]), "count": int(r["count"])} for idx, r in by_period.iterrows()}
-                    trends["best_period"] = str(by_period["sum"].idxmax())
-                    trends["worst_period"] = str(by_period["sum"].idxmin())
-        except Exception:
-            pass
-
-    # Numeric columns by strategy
-    units_col = column_mapping.get("units", "units_sold")
-    if units_col in df.columns:
-        df[units_col] = pd.to_numeric(df[units_col], errors="coerce")
-        units_series = df[units_col].dropna()
-        if not units_series.empty:
-            trends["units_sold_total"] = float(units_series.sum())
-            trends["units_sold_mean"] = float(units_series.mean())
-
-    if "total" in trends and trends.get("units_sold_total", 0) > 0:
-        trends["revenue_per_unit"] = float(trends["total"] / trends["units_sold_total"])
-
-    new_clients_col = column_mapping.get("new_clients", "new_clients")
-    if new_clients_col in df.columns:
-        df[new_clients_col] = pd.to_numeric(df[new_clients_col], errors="coerce")
-        nc = df[new_clients_col].dropna()
-        if not nc.empty:
-            trends["new_clients_total"] = int(nc.sum())
-            trends["new_clients_mean"] = float(nc.mean())
-
-    churned_col = column_mapping.get("churned_clients", "churned_clients")
-    if churned_col in df.columns:
-        df[churned_col] = pd.to_numeric(df[churned_col], errors="coerce")
-        cc = df[churned_col].dropna()
-        if not cc.empty:
-            trends["churned_clients_total"] = int(cc.sum())
-            trends["churned_clients_mean"] = float(cc.mean())
-
-    if "avg_deal_size" in df.columns:
-        ds = pd.to_numeric(df["avg_deal_size"], errors="coerce").dropna()
-        if not ds.empty:
-            trends["average_deal_size"] = float(ds.mean())
-    elif "revenue_per_unit" in trends:
-        trends["average_deal_size"] = float(trends["revenue_per_unit"])
+    trends["total"]  = float(series.sum())
+    trends["mean"]   = float(series.mean())
+    trends["median"] = float(series.median())
+    trends["min"]    = float(series.min())
+    trends["max"]    = float(series.max())
+    trends["count"]  = int(series.count())
 
     if "sales_growth_pct" in df.columns:
-        pct = pd.to_numeric(df["sales_growth_pct"], errors="coerce").dropna()
-        if not pct.empty:
-            trends["sales_growth_pct_mean"] = float(pct.mean())
-            trends["sales_growth_pct_median"] = float(pct.median())
+        growth = pd.to_numeric(
+            df["sales_growth_pct"], errors="coerce"
+        ).dropna()
+        if not growth.empty:
+            trends["growth_rate"] = float(growth.mean())
 
-    # Regression and forecast
-    try:
-        x = np.arange(sales_series.size)
-        coeffs = np.polyfit(x, sales_series.values, 1)
-        slope, intercept = coeffs[0], coeffs[1]
-        trends["slope"] = float(slope)
-        trends["intercept"] = float(intercept)
-        trends["next_period_prediction"] = float(slope * sales_series.size + intercept)
+    if "month" in df.columns:
 
-        y_pred = slope * x + intercept
-        ss_res = np.sum((sales_series.values - y_pred) ** 2)
-        ss_tot = np.sum((sales_series.values - sales_series.mean()) ** 2)
-        trends["forecast_confidence"] = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
-    except Exception:
-        trends["slope"] = None
-        trends["intercept"] = None
-        trends["next_period_prediction"] = None
-        trends["forecast_confidence"] = 0.0
+        print(f"[Sales Agent] Parsing month column...")
+        print(f"[Sales Agent] Sample values: {df['month'].head(3).tolist()}")
 
-    # Add additional sales columns summary
-    all_sales_cols = detect_sales_columns(df)
-    if len(all_sales_cols) > 1:
-        trends["all_sales_columns"] = {}
-        for col in all_sales_cols:
-            if col != sales_col:
-                cnum = pd.to_numeric(df[col], errors="coerce").dropna()
-                if not cnum.empty:
-                    trends["all_sales_columns"][col] = {"total": float(cnum.sum()), "average": float(cnum.mean())}
+        # Parse using flexible parser
+        df["month_parsed"] = df["month"].apply(parse_month_flexible)
 
-    # Add full column-level diagnostics (all columns considered)
-    trends["column_summary"] = {}
-    for col in df.columns:
-        col_info = {
-            "dtype": str(df[col].dtype),
-            "missing": int(df[col].isna().sum()),
-            "unique": int(df[col].nunique(dropna=True)),
-        }
-        if pd.api.types.is_numeric_dtype(df[col]):
-            numeric = pd.to_numeric(df[col], errors="coerce").dropna()
-            if not numeric.empty:
-                col_info.update({
-                    "mean": float(numeric.mean()),
-                    "median": float(numeric.median()),
-                    "std": float(numeric.std(ddof=0)),
-                    "min": float(numeric.min()),
-                    "max": float(numeric.max()),
-                    "sum": float(numeric.sum()),
-                })
+        # Check how many parsed successfully
+        parsed_count = df["month_parsed"].notna().sum()
+        total_count  = len(df)
+        print(f"[Sales Agent] Parsed {parsed_count}/{total_count} dates successfully")
+
+        if parsed_count == 0:
+            print(f"[Sales Agent] Warning: Date parsing failed for all records")
         else:
-            top = df[col].dropna().astype(str).value_counts().head(5)
-            col_info["top_values"] = [{"value": idx, "count": int(cnt)} for idx, cnt in top.items()]
+            df = df.sort_values("month_parsed", na_position="last")
+            df_valid = df.dropna(subset=["month_parsed"])
 
-        trends["column_summary"][col] = col_info
+            if not df_valid.empty:
+                # Monthly aggregation
+                monthly = df_valid.groupby("month_parsed")[sales_col].sum()
+                period_breakdown = {
+                    str(date.strftime("%b-%Y")): float(val)
+                    for date, val in monthly.items()
+                }
+                trends["period_breakdown"] = period_breakdown
+
+                # Year-wise breakdown
+                df_valid["year"] = df_valid["month_parsed"].dt.year
+                yearly = df_valid.groupby("year")[sales_col].sum()
+                trends["yearly_breakdown"] = {
+                    str(year): float(val)
+                    for year, val in yearly.items()
+                }
+
+                # Available years
+                available_years = sorted(list(set(
+                    df_valid["month_parsed"].dt.year.unique()
+                )))
+                trends["available_years"] = available_years
+
+                # Date range
+                valid_dates = df_valid["month_parsed"].dropna()
+                min_date = valid_dates.min()
+                max_date = valid_dates.max()
+                if pd.notna(min_date) and pd.notna(max_date):
+                    trends["date_range"] = {
+                        "earliest": str(min_date.strftime("%b-%Y")),
+                        "latest":   str(max_date.strftime("%b-%Y"))
+                    }
+
+                print(f"[Sales Agent] Processed {len(period_breakdown)} months")
+
+    if "region" in df.columns:
+        region_sales = df.groupby("region")[sales_col].sum()
+        trends["region_breakdown"] = {
+            str(k): float(v) for k, v in region_sales.items()
+        }
+        print(f"[Sales Agent] Region breakdown: {list(trends['region_breakdown'].keys())}")
+
+    if "product" in df.columns:
+        product_sales = df.groupby("product")[sales_col].sum()
+        trends["product_breakdown"] = {
+            str(k): float(v) for k, v in product_sales.items()
+        }
+        print(f"[Sales Agent] Product breakdown: {list(trends['product_breakdown'].keys())}")
+
+    try:
+        x = np.arange(len(series))
+        slope, intercept = np.polyfit(x, series.values, 1)
+        trends["next_prediction"] = float(slope * len(series) + intercept)
+    except:
+        trends["next_prediction"] = None
+
+    trends["available_columns"] = df.columns.tolist()
+    trends["sales_column_used"]  = sales_col
+
+    categorical_info = {}
+    for col in df.columns:
+        if df[col].dtype == "object":
+            unique_vals = df[col].unique().tolist()
+            if len(unique_vals) <= 20:
+                categorical_info[col] = unique_vals
+    trends["categorical_metadata"] = categorical_info
 
     return trends
 
 
-def compute_trends(df: pd.DataFrame, column_mapping: dict = None) -> dict:
-    """
-    Backward compatible wrapper using detailed trends computation.
-    Flattens nested dicts to make them chart-compatible.
-    """
-    detailed = compute_detailed_trends(df, column_mapping=column_mapping)
-    
-    if "error" in detailed:
-        return detailed
-    
-    simple = {
-        "count": detailed.get("count", 0),
-        "mean": detailed.get("mean", 0),
-        "median": detailed.get("median", 0),
-        "std": detailed.get("std", 0),
-        "total": detailed.get("total", 0),
-    }
-    
-    if "period_growth_rate" in detailed:
-        simple["simple_growth_rate"] = detailed["period_growth_rate"]
-    if "next_period_prediction" in detailed:
-        simple["next_prediction"] = detailed["next_period_prediction"]
-    if "slope" in detailed:
-        simple["slope"] = detailed["slope"]
-    if "intercept" in detailed:
-        simple["intercept"] = detailed["intercept"]
-    
-    # Flatten sales_columns for chart compatibility
-    if "all_sales_columns" in detailed and isinstance(detailed["all_sales_columns"], dict):
-        flattened_sales = {}
-        for col_name, col_data in detailed["all_sales_columns"].items():
-            if isinstance(col_data, dict) and "total" in col_data:
-                flattened_sales[col_name] = col_data["total"]
-            else:
-                flattened_sales[col_name] = col_data
-        simple["sales_breakdown"] = flattened_sales
-    
-    # Flatten period_breakdown for chart compatibility
-    if "period_breakdown" in detailed and isinstance(detailed["period_breakdown"], dict):
-        flattened_periods = {}
-        for period, period_data in detailed["period_breakdown"].items():
-            if isinstance(period_data, dict) and "total" in period_data:
-                flattened_periods[str(period)] = period_data["total"]
-            else:
-                flattened_periods[str(period)] = period_data
-        simple["period_breakdown"] = flattened_periods
-    
-    return simple
+def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None):
 
-
-def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dict:
-    """
-    Main entry point for Sales & Data Scientist Agent.
-    Called by Orchestrator whenever sales analysis is needed.
-
-    Args:
-        query : question from Orchestrator
-        df    : optional DataFrame with sales data
-        column_mapping : dict mapping {"sales": col_name}
-
-    Returns:
-        {
-          "agent"    : "Sales Data Scientist",
-          "query"    : original query,
-          "metrics"  : computed sales metrics,
-          "response" : LLM full analysis
-        }
-    """
-    # ── Ensure query is valid string ──
-    if query is None:
-        raise ValueError("Query is None in Sales Agent")
-    query = str(query).strip()
-    
     if not query:
-        raise ValueError("Query is empty in Sales Agent")
-    
-    print(f"\n[Sales Agent] Query received: {query}")
+        raise ValueError("Query is empty")
 
-    # Step 1: RAG retrieval from sales_reports collection
-    try:
-        chunks  = rag_query("sales_reports", query, top_k=5)
-    except Exception as e:
-        print(f"[Sales Agent] RAG query error: {str(e)}")
-        chunks = []
-    
-    context = format_context(chunks) if chunks else "No document context available."
-    
-    # Ensure context is a valid string
-    if not context or context is None:
-        context = "No document context available."
-    context = str(context)  # Force to string
+    print(f"\n[Sales Agent] Query: {query}")
 
-    # Step 2: Pandas trend analysis only if CSV data provided
-    metrics = {}
-    trends = {}
-    trends_text = "No sales data provided. Analyze from documents only."
-    
+    trends      = {}
+    trends_text = "No CSV data uploaded"
+
     if df is not None and not df.empty:
-        print(f"[Sales Agent] Using CSV data: {df.shape[0]} rows")
-        try:
-            trends = compute_trends(df, column_mapping=column_mapping)
-            metrics = trends  # Store metrics for validation
-            
-            # Format trends for LLM with details
-            trends_lines = []
-            
-            # Basic statistics
+
+        trends = compute_trends(df, column_mapping)
+
+        if "error" in trends:
+            trends_text = f"Error: {trends['error']}"
+        else:
+            lines = []
+
+            # Sales column used
+            if "sales_column_used" in trends:
+                lines.append(f"Sales Column Used: {trends['sales_column_used']}")
+
+            # Date range
+            if "date_range" in trends:
+                lines.append(
+                    f"Data Range: {trends['date_range']['earliest']} "
+                    f"to {trends['date_range']['latest']}"
+                )
+
+            # Available years
+            if "available_years" in trends:
+                years_str = ", ".join(map(str, trends["available_years"]))
+                lines.append(f"Years in Dataset: {years_str}")
+
+            # Basic metrics
+            lines.append("\n--- OVERALL METRICS ---")
             for key in ["total", "mean", "median", "min", "max"]:
-                if key in trends and isinstance(trends.get(key), (int, float)) and trends[key] != 0:
-                    trends_lines.append(f"  {key.replace('_', ' ').title()}: {safe_format_value(trends[key])}")
-            
-            # Growth metrics
-            if "simple_growth_rate" in trends and isinstance(trends.get("simple_growth_rate"), (int, float)):
-                trends_lines.append(f"  Growth Rate: {trends['simple_growth_rate']*100:.1f}%")
-            if "next_prediction" in trends and isinstance(trends.get("next_prediction"), (int, float)):
-                trends_lines.append(f"  Next Period Prediction: {safe_format_value(trends['next_prediction'])}")
-            
-            # Sales breakdown by type
-            if "sales_breakdown" in trends and isinstance(trends["sales_breakdown"], dict):
-                trends_lines.append("\nSales Breakdown:")
-                for col, data in trends["sales_breakdown"].items():
-                    if isinstance(data, dict) and "total" in data:
-                        trends_lines.append(f"  {col}: {safe_format_value(data['total'])}")
-            
-            # Period breakdown
-            if "period_breakdown" in trends and isinstance(trends["period_breakdown"], dict):
-                trends_lines.append("\nPeriod-wise Analysis:")
-                for period, data in trends["period_breakdown"].items():
-                    if isinstance(data, dict) and "total" in data:
-                        trends_lines.append(f"  {period}: {safe_format_value(data['total'])}")
-                if "best_period" in trends and trends["best_period"]:
-                    trends_lines.append(f"  Best Period: {safe_format_value(trends['best_period'])}")
-                if "worst_period" in trends and trends["worst_period"]:
-                    trends_lines.append(f"  Worst Period: {safe_format_value(trends['worst_period'])}")
-            
-            trends_text = "\n".join(trends_lines) if trends_lines else "Trends computed from CSV data."
-        except Exception as e:
-            print(f"[Sales Agent] Error computing trends: {str(e)}")
-            trends_text = "Trends available from CSV data."
-    else:
-        print("[Sales Agent] No CSV data provided. Analyzing from PDF context only.")
+                if key in trends:
+                    lines.append(f"{key.title()}: {safe_format_value(trends[key])}")
 
-    # Step 3: LLM interprets RAG context + trends
-    # Ensure all components are valid strings
-    query_str = str(query) if query else "No query provided"
-    
-    # Use domain-filtered RAG if available
-    data_source = "CSV"
-    domain_relevance = 1.0
-    try:
-        filtered_chunks, domain_relevance = query_with_domain_filter(
-            "sales_reports", query, domain="sales", top_k=10
-        )
-        context = format_context(filtered_chunks) if filtered_chunks else ""
-        context_str = str(context) if context else "No context available"
-        if filtered_chunks:
-            data_source = f"CSV + RAG Documents (Domain-Filtered)"
-    except Exception as e:
-        print(f"[Sales Agent] Domain filtering failed: {e}. Using CSV only.")
-        context_str = ""
-    
-    trends_str = str(trends_text) if trends_text else "No trends"
-    
-    prompt = f"""You are a Sales Data Scientist AI agent in a
-multi-agent financial intelligence system.
+            if "growth_rate" in trends:
+                lines.append(
+                    f"Avg Growth Rate: {safe_format_value(trends['growth_rate'])}%"
+                )
 
-RETRIEVED CONTEXT FROM DOCUMENTS:
-{context_str}
+            if "next_prediction" in trends and trends["next_prediction"]:
+                lines.append(
+                    f"Next Period Prediction: {safe_format_value(trends['next_prediction'])}"
+                )
 
-COMPUTED SALES METRICS:
-{trends_str}
+            # Yearly breakdown
+            if "yearly_breakdown" in trends:
+                lines.append("\n--- YEARLY SALES ---")
+                for year, val in sorted(trends["yearly_breakdown"].items()):
+                    lines.append(f"  {year}: {safe_format_value(val)}")
 
-QUERY: {query_str}
+            # Monthly breakdown — ALL months
+            if "period_breakdown" in trends and trends["period_breakdown"]:
+                lines.append(f"\n--- MONTHLY SALES ({len(trends['period_breakdown'])} months) ---")
+                for month, sales in trends["period_breakdown"].items():
+                    lines.append(f"  {month}: {safe_format_value(sales)}")
 
-Respond using EXACTLY this structure:
-## Sales Summary
-Brief factual summary
+            # Region breakdown
+            if "region_breakdown" in trends:
+                lines.append("\n--- SALES BY REGION ---")
+                for region, val in sorted(
+                    trends["region_breakdown"].items(),
+                    key=lambda x: x[1], reverse=True
+                ):
+                    lines.append(f"  {region}: {safe_format_value(val)}")
 
-## Key Metrics
-- Total
-- Mean
-- Median
-- Min / Max
+            # Product breakdown
+            if "product_breakdown" in trends:
+                lines.append("\n--- SALES BY PRODUCT ---")
+                for product, val in sorted(
+                    trends["product_breakdown"].items(),
+                    key=lambda x: x[1], reverse=True
+                ):
+                    lines.append(f"  {product}: {safe_format_value(val)}")
 
-## Insights
-Only direct observations
+            # Categorical metadata
+            if "categorical_metadata" in trends and trends["categorical_metadata"]:
+                lines.append("\n--- AVAILABLE CATEGORIES ---")
+                for col, values in trends["categorical_metadata"].items():
+                    lines.append(
+                        f"  {col.upper()}: {', '.join(map(str, values))}"
+                    )
 
-## Limitations
-Mention missing data if needed
+            trends_text = "\n".join(lines)
+
+    prompt = f"""
+You are a Sales Analyst providing data-driven insights to business stakeholders.
+
+The COMPLETE dataset breakdown is provided below including ALL months, years, 
+regions and products. Use this data to answer the user's question precisely.
+
+COMPLETE SALES DATA:
+{trends_text}
+
+USER QUESTION:
+{query}
+
+ANALYSIS INSTRUCTIONS:
+1. Use the exact data provided above — do NOT say data is unavailable
+2. If user asks about 2023 or 2024 specifically, refer to the 
+   YEARLY SALES and MONTHLY SALES sections above
+3. Ground ALL statements in the numbers shown above
+4. Provide specific figures, percentages and comparisons
+5. If asking about regions or products, use the breakdowns provided
+
+RESPONSE FORMAT:
+- Start with a direct answer to the question
+- Support with specific numbers from the data
+- Provide trend analysis if relevant
+- Give actionable insights
+- Keep it professional and concise
+
+Respond confidently using the data provided above.
 """
 
     response = call_gemini(prompt)
+    response = validate_response(response, trends)
 
-    # 🔥 VALIDATION
-    response = validate_response(response, metrics)
+    visualization = None
+    if VISUALIZATION_AVAILABLE and df is not None and not df.empty:
+        try:
+            sales_col    = detect_sales_column(df, column_mapping)
+            chart_intent = detect_chart_intent(query)
+
+            if chart_intent == "region" and "region" in df.columns:
+                region_sales = df.groupby("region")[sales_col].sum().to_dict()
+                visualization = create_category_bar(
+                    region_sales, title="Sales by Region"
+                )
+                print(f"[Sales Agent] Region visualization created")
+
+            elif chart_intent == "product" and "product" in df.columns:
+                product_sales = df.groupby("product")[sales_col].sum().to_dict()
+                visualization = create_category_bar(
+                    product_sales, title="Sales by Product"
+                )
+                print(f"[Sales Agent] Product visualization created")
+
+            elif chart_intent in ["trend", "default"] and "month" in df.columns:
+                # Use parsed months for proper sorting
+                df_temp = df.copy()
+                df_temp["month_parsed"] = df_temp["month"].apply(
+                    parse_month_flexible
+                )
+                df_temp = df_temp.dropna(subset=["month_parsed"])
+                df_temp = df_temp.sort_values("month_parsed")
+
+                monthly_sales = (
+                    df_temp.groupby("month_parsed")[sales_col]
+                    .sum()
+                )
+                monthly_dict = {
+                    str(date.strftime("%b-%Y")): float(val)
+                    for date, val in monthly_sales.items()
+                }
+                visualization = create_timeseries_line(
+                    monthly_dict, title="Sales Trend - Monthly"
+                )
+                print(f"[Sales Agent] Time series visualization created")
+
+            # Fallbacks
+            elif "month" in df.columns:
+                df_temp = df.copy()
+                df_temp["month_parsed"] = df_temp["month"].apply(
+                    parse_month_flexible
+                )
+                df_temp = df_temp.dropna(subset=["month_parsed"])
+                df_temp = df_temp.sort_values("month_parsed")
+                monthly_sales = df_temp.groupby(
+                    "month_parsed"
+                )[sales_col].sum()
+                monthly_dict = {
+                    str(date.strftime("%b-%Y")): float(val)
+                    for date, val in monthly_sales.items()
+                }
+                visualization = create_timeseries_line(
+                    monthly_dict, title="Sales Trend - Monthly"
+                )
+
+            elif "region" in df.columns:
+                region_sales = df.groupby("region")[sales_col].sum().to_dict()
+                visualization = create_category_bar(
+                    region_sales, title="Sales by Region"
+                )
+
+            elif "product" in df.columns:
+                product_sales = df.groupby("product")[sales_col].sum().to_dict()
+                visualization = create_category_bar(
+                    product_sales, title="Sales by Product"
+                )
+
+        except Exception as e:
+            print(f"[Sales Agent] Visualization generation error: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     return {
-        "agent": "Sales Analyst",
-        "agent_domain": "Sales & Revenue Analysis",
-        "query": query,
-        "metrics": metrics,
-        "response": response,
-        "data_source": data_source,
-        "confidence": "HIGH" if metrics else "MEDIUM",
+        "agent":         "Sales Analyst",
+        "query":         query,
+        "metrics":       trends,
+        "response":      response,
+        "visualization": visualization,
     }
-

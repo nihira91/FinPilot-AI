@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from rag.pipeline import build_collection, COLLECTIONS
 from rag.session_store import clear_session
 from orchestrator.orchestrator_agent import build_graph
+from orchestrator.chatbot import process_chat_question
 import shutil
 
 load_dotenv()
@@ -33,6 +34,7 @@ if "session_initialized" not in st.session_state:
     st.session_state.session_initialized = False
     st.session_state.uploaded_collections = {}
     st.session_state.session_id = str(int(time.time() * 1000))  # Unique session ID
+    st.session_state.chat_history = []  # Chat message history for chatbot
 
 # ── Custom CSS ────────────────────────────────────────────
 st.markdown("""
@@ -679,314 +681,126 @@ with st.sidebar:
     except Exception as e:
         st.warning(f"System collection setup failed: {str(e)}")
 
-    st.markdown("---")
-
-    # System Status
-    st.markdown('<div class="sidebar-section-title">System Status</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="status-row"><span>Gemini 2.5 Flash</span><span class="status-online">● ONLINE</span></div>
-    <div class="status-row"><span>LangGraph</span><span class="status-online">● ACTIVE</span></div>
-    <div class="status-row"><span>ChromaDB</span><span class="status-online">● READY</span></div>
-    <div class="status-row"><span>MCP Server</span><span class="status-online">● READY</span></div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.caption("FinPilot AI · v1.0 · LLM+RAG Project")
 
 
-# ── Main Tabs ─────────────────────────────────────────────
-tab1, tab2 = st.tabs(["◈  INTELLIGENCE QUERY", "◈  SYSTEM ARCHITECTURE"])
 
+# ── Main Content ──────────────────────────────────────────
+st.markdown("""
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:1.5rem;">
+    <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
+    <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">AI-POWERED ANALYSIS ASSISTANT</span>
+    <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
+</div>
+""", unsafe_allow_html=True)
 
-# ── Tab 1: Query ──────────────────────────────────────────
-with tab1:
+st.markdown("""
+**Ask questions about your business data.** Our AI will:
+- Analyze your financial, sales, and investment documents
+- Provide detailed insights tailored to your questions
+- Support follow-up conversations for deeper analysis
+""")
 
-    # Sample Query Buttons
-    st.markdown('<p style="font-family:\'DM Mono\',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;text-transform:uppercase;margin-bottom:0.8rem;">Quick Queries</p>', unsafe_allow_html=True)
+st.markdown("---")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    sample_query = ""
+# Chat message display area
+chat_container = st.container()
 
-    with col1:
-        if st.button("📊 Financial Analysis"):
-            sample_query = "Analyse our Q3 financial performance"
-    with col2:
-        if st.button("📈 Sales Trends"):
-            sample_query = "What are our sales trends this year?"
-    with col3:
-        if st.button("💰 Investment Strategy"):
-            sample_query = "What investment strategy is recommended?"
-    with col4:
-        if st.button("☁️ Cloud Infrastructure"):
-            sample_query = "Recommend cloud infrastructure for scaling"
-    with col5:
-        if st.button("🔍 Complete Analysis"):
-            sample_query = "Give complete analysis of our business performance and suggest expansion strategy"
-
-    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-
-    # Query Input
-    query = st.text_area(
-        "ENTER YOUR QUERY",
-        value=sample_query,
-        height=120,
-        placeholder="e.g. Analyze our financial performance and suggest strategic investment opportunities based on consultant reports...",
-    )
-
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
-    with col_btn2:
-        col_run, col_viz = st.columns([2, 1])
-        with col_run:
-            run_clicked = st.button("⚡ RUN ANALYSIS", type="primary", use_container_width=True)
-        with col_viz:
-            visualize_toggled = st.checkbox("📈 Visualize", value=False, help="Generate charts when available")
-
-    if run_clicked:
-        if not query.strip():
-            st.warning("Please enter a query to analyse.")
-        else:
-            # ── Validate query has content ──
-            if not query or not str(query).strip():
-                st.warning("Please enter a query to analyze.")
-            else:
-                query = str(query).strip()  # Clean whitespace only
-                progress = st.progress(0)
-                status   = st.empty()
-
-                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Orchestrator routing query...</p>', unsafe_allow_html=True)
-                progress.progress(15)
-                time.sleep(0.4)
-
-                status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Agents processing...</p>', unsafe_allow_html=True)
-                progress.progress(40)
-
-                try:
-                    # Simple visualization request: just use the checkbox toggle
-                    graph  = build_graph()
-                    input_data = {"query": query, "request_visualization": visualize_toggled}
-                    
-                    if "financial_csv" in st.session_state:
-                        input_data["financial_csv"] = st.session_state.financial_csv
-                    if "sales_csv" in st.session_state:
-                        input_data["sales_csv"] = st.session_state.sales_csv
-                    if "financial_column_mapping" in st.session_state:
-                        input_data["financial_column_mapping"] = st.session_state.financial_column_mapping
-                    if "sales_column_mapping" in st.session_state:
-                        input_data["sales_column_mapping"] = st.session_state.sales_column_mapping
-                    result = graph.invoke(input_data)
-
-                    progress.progress(85)
-                    status.markdown('<p style="color:#C9A84C;font-family:\'DM Mono\',monospace;font-size:0.8rem;">⟳ &nbsp;Aggregating intelligence...</p>', unsafe_allow_html=True)
-                    time.sleep(0.3)
-
-                    progress.progress(100)
-                    time.sleep(0.2)
-                    progress.empty()
-                    status.empty()
-
-                    # ── Result Display ──
-                    st.markdown("""
-                    <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
-                        <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
-                        <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTELLIGENCE REPORT</span>
-                        <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    st.markdown(f'<div class="result-wrapper">{result["final_output"]}</div>', unsafe_allow_html=True)
-
-                    # ── Agent Attribution Section ──
-                    agent_info = result.get("agent_info", {})
-                    if agent_info:
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            agent_name = agent_info.get("agent", "Unknown Agent")
-                            st.info(f"👤 **Agent**\n{agent_name}")
-                        with col2:
-                            domain = agent_info.get("agent_domain", "N/A")
-                            st.info(f"🎯 **Domain**\n{domain}")
-                        with col3:
-                            data_source = agent_info.get("data_source", "N/A")
-                            st.info(f"📊 **Data Source**\n{data_source}")
-                        with col4:
-                            confidence = agent_info.get("confidence", "N/A")
-                            confidence_color = "🟢" if confidence == "HIGH" else "🟡"
-                            st.info(f"{confidence_color} **Confidence**\n{confidence}")
-
-                    # ── Visualization Charts Display ──
-                    if result.get("visualization_output"):
-                        viz_result = result["visualization_output"]
-                        charts = viz_result.get("charts", [])
-                        
-                        if charts:
-                            st.markdown("""
-                            <div style="display:flex;align-items:center;gap:10px;margin:1.5rem 0 1rem;">
-                                <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
-                                <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">INTERACTIVE CHARTS</span>
-                                <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            # Display each chart
-                            for chart in charts:
-                                with st.container():
-                                    col_title, col_type = st.columns([3, 1])
-                                    with col_title:
-                                        st.subheader(chart.get("title", "Chart"))
-                                    with col_type:
-                                        st.caption(f"📈 {chart.get('chart_type', 'chart').upper()}")
-                                    
-                                    # Render Plotly chart
-                                    try:
-                                        import json
-                                        import plotly.graph_objects as go
-                                        plotly_json = chart.get("plotly_json")
-                                        if plotly_json:
-                                            if isinstance(plotly_json, str):
-                                                chart_data = json.loads(plotly_json)
-                                            else:
-                                                chart_data = plotly_json
-                                            fig = go.Figure(chart_data)
-                                            st.plotly_chart(fig, use_container_width=True)
-                                    except Exception as e:
-                                        st.warning(f"Could not render chart: {str(e)}")
-                    
-                    # Agent route badge
-                    routes = result.get("routes", [result.get("route", "unknown")])
-                    if isinstance(routes, list):
-                        agents_str = " · ".join([r.upper() for r in routes])
-                    else:
-                        agents_str = str(routes).upper()
-
-                    st.markdown(f"""
-                    <div class="route-badge">
-                        <div class="route-dot"></div>
-                        ROUTED → {agents_str}
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                except Exception as e:
-                    progress.empty()
-                    status.empty()
-                    st.error(f"**Analysis Error:** {str(e)}")
-
-
-# ── Tab 2: System Architecture ────────────────────────────
-with tab2:
-
-    # Architecture Grid
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown("""
-        <div class="arch-card">
-            <div class="arch-card-title">AI Agents</div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Orchestrator</strong> — LangGraph routing</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Financial Analyst</strong> — P&L, Budget</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Sales Scientist</strong> — Trends, Patterns</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Investment Strategist</strong> — RAG Reports</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Cloud Architect</strong> — Infrastructure</div></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col2:
-        st.markdown("""
-        <div class="arch-card">
-            <div class="arch-card-title">Technology Stack</div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>LLM</strong> — Gemini 2.5 Flash</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Orchestration</strong> — LangGraph</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Embeddings</strong> — all-MiniLM-L6-v2</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Vector DB</strong> — ChromaDB</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Protocol</strong> — MCP</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Backend</strong> — Python + FastAPI</div></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col3:
-        st.markdown("""
-        <div class="arch-card">
-            <div class="arch-card-title">RAG Pipeline</div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>PDF Parsing</strong> — pypdf</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Chunking</strong> — Recursive Splitter</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Embeddings</strong> — HuggingFace</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Retrieval</strong> — Cosine Similarity</div></div>
-            <div class="arch-item"><div class="arch-item-dot"></div><div><strong>Collections</strong> — 5 Specialized</div></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
-
-    # Knowledge Base Status
-    st.markdown("""
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem;">
-        <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
-        <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">KNOWLEDGE BASE STATUS</span>
-        <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    try:
-        import chromadb
-        from chromadb.config import Settings
-
-        chroma_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_store")
-        CHROMA_PERSISTENT = os.getenv("CHROMA_PERSISTENT", "0") in ["1", "true", "True"]
-
-        if not CHROMA_PERSISTENT and not os.path.exists(chroma_path):
-            # In-memory mode does not require a folder; just show existing memory metrics (may be 0 until update).
-            pass
-
-        if CHROMA_PERSISTENT and not os.path.exists(chroma_path):
-            st.warning("chroma_store/ not found. Upload documents via sidebar first or set CHROMA_PERSISTENT=0.")
-
-        client = chromadb.Client(settings=Settings(anonymized_telemetry=False)) if not CHROMA_PERSISTENT else chromadb.PersistentClient(
-            path=chroma_path,
-            settings=Settings(anonymized_telemetry=False)
-        )
-        metric_cols = st.columns(6)
-        collections = [
-            "financial_reports",
-            "sales_reports",
-            "investment_reports",
-            "cloud_docs"
-        ]
-        for i, name in enumerate(collections):
-            with metric_cols[i]:
-                try:
-                    col   = client.get_collection(name)
-                    count = col.count()
-                    label = name.replace("_", " ").title()
-                    st.metric(label, f"{count}", delta="chunks indexed")
-                except Exception:
-                    label = name.replace("_", " ").title()
-                    st.metric(label, "—", delta="empty")
-    except Exception as e:
-        st.error(f"ChromaDB error: {str(e)}")
-
-    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-
-    # Document Collections
-    st.markdown("""
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem;">
-        <div style="height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(201,168,76,0.3));"></div>
-        <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.2em;">DOCUMENT COLLECTIONS</span>
-        <div style="height:1px;flex:1;background:linear-gradient(90deg,rgba(201,168,76,0.3),transparent);"></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    doc_cols = st.columns(5)
-    doc_collections = [
-        ("📊", "financial_reports/", "Financial Analyst Agent"),
-        ("📈", "sales_reports/", "Sales Agent"),
-        ("💰", "investment_reports/", "Investment Strategist"),
-        ("☁️", "cloud_docs/", "Cloud Architect Agent"),
-    ]
-    for i, (icon, folder, agent) in enumerate(doc_collections):
-        with doc_cols[i]:
+# Display chat history
+with chat_container:
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
             st.markdown(f"""
-            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:0.8rem;text-align:center;">
-                <div style="font-size:1.4rem;margin-bottom:0.4rem;">{icon}</div>
-                <div style="font-family:'DM Mono',monospace;font-size:0.6rem;color:#C9A84C;margin-bottom:0.3rem;">{folder}</div>
-                <div style="font-size:0.65rem;color:#3D4F61;">{agent}</div>
+            <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem;">
+                <div style="background:rgba(201,168,76,0.15);border:1px solid rgba(201,168,76,0.3);border-radius:8px;padding:0.8rem 1rem;max-width:70%;text-align:right;">
+                    <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#7A6230;letter-spacing:0.1em;text-transform:uppercase;">YOU</span>
+                    <p style="margin:0.3rem 0 0;">{msg['content']}</p>
+                </div>
             </div>
             """, unsafe_allow_html=True)
+        else:
+            agents_badge = f"<span style='font-family:\"DM Mono\",monospace;font-size:0.6rem;color:#7A6230;letter-spacing:0.1em;'>{msg.get('agents_used', 'AGENTS')}</span>"
+            st.markdown(f"""
+            <div style="display:flex;justify-content:flex-start;margin-bottom:1rem;">
+                <div style="background:rgba(13,17,23,0.8);border:1px solid rgba(201,168,76,0.2);border-radius:8px;padding:1rem;max-width:85%;">
+                    <div style="margin-bottom:0.5rem;font-size:0.75rem;color:#C9A84C;">{agents_badge}</div>
+                    <p style="margin:0;color:#F0EAD6;line-height:1.6;">{msg['content']}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display visualizations if available
+            if msg.get("visualizations"):
+                for agent, fig in msg["visualizations"].items():
+                    with st.expander(f"📊 {agent.title()} Chart", expanded=True):
+                        st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+
+# Input area
+col_input, col_send = st.columns([5, 1])
+
+with col_input:
+    user_question = st.text_input(
+        "Ask a question about your data...",
+        placeholder="e.g., What are our sales trends? Show me revenue breakdown. How profitable are we?",
+        label_visibility="collapsed"
+    )
+
+with col_send:
+    send_button = st.button("🚀 Send", use_container_width=True, type="primary")
+
+# Process user question
+if send_button and user_question.strip():
+    user_question = user_question.strip()
+    
+    # Add user message to history
+    st.session_state.chat_history.append({
+        "role": "user",
+        "content": user_question
+    })
+    
+    # Show loading state
+    with st.spinner("🔄 Processing your question..."):
+        try:
+            # Get previous agents for context (from last assistant message)
+            previous_agents = None
+            for msg in reversed(st.session_state.chat_history):
+                if msg["role"] == "assistant" and msg.get("agents"):
+                    previous_agents = msg["agents"]
+                    break
+            
+            # Process the question using chatbot orchestrator
+            result = process_chat_question(
+                question=user_question,
+                financial_csv=st.session_state.get("financial_csv"),
+                sales_csv=st.session_state.get("sales_csv"),
+                financial_column_mapping=st.session_state.get("financial_column_mapping"),
+                sales_column_mapping=st.session_state.get("sales_column_mapping"),
+                previous_agents=previous_agents,
+            )
+            
+            # Add assistant response to history
+            assistant_msg = {
+                "role": "assistant",
+                "content": result["final_answer"],
+                "agents_used": result["agents_summary"],
+                "agents": result["agents"]
+            }
+            
+            # Add visualizations if any
+            if result.get("visualization_data"):
+                assistant_msg["visualizations"] = result["visualization_data"]
+            
+            st.session_state.chat_history.append(assistant_msg)
+            
+            # Rerun to display new messages
+            st.rerun()
+            
+        except Exception as e:
+            error_msg = f"❌ Error processing question: {str(e)}"
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": error_msg,
+                "agents_used": "ERROR"
+            })
+            st.rerun()

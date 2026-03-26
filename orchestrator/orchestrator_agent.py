@@ -107,21 +107,22 @@ Example: financial,investment"""
     # AND query doesn't already have a clear single route
     if len(routes) == 0:
         # Only use keywords if LLM routing returned nothing
-        sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal"]
-        fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue"]
-        inv_keywords   = ["investment", "portfolio", "expansion"]
+        sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal", "pattern", "trend", "anomal", "customer", "order", "conversion"]
+        fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue", "forecast", "cash", "balance", "margin"]
+        inv_keywords   = ["investment", "portfolio", "expansion", "strategy", "risk", "consultant"]
         cloud_keywords = ["cloud", "aws", "gcp", "infrastructure", "scalab", "deployment"]
 
         if any(k in query_lower for k in sales_keywords):
             routes.append("sales")
-        elif any(k in query_lower for k in inv_keywords):
+        if any(k in query_lower for k in inv_keywords):
             routes.append("investment")
-        elif any(k in query_lower for k in fin_keywords):
+        if any(k in query_lower for k in fin_keywords):
             routes.append("financial")
-        elif any(k in query_lower for k in cloud_keywords):
+        if any(k in query_lower for k in cloud_keywords):
             routes.append("cloud")
-        else:
-            # Final fallback
+        
+        if not routes:
+            # Final fallback if no keywords matched
             routes = ["financial"]
     
     # Deduplicate routes

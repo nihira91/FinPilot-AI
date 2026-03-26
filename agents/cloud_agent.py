@@ -32,17 +32,35 @@ def run(query: str) -> dict:
     
     if filtered_chunks:
         context = format_context(filtered_chunks)
-        data_source = f"RAG Documents (Domain-Filtered, {domain_relevance:.0%} relevance)"
+        data_source = f"Cloud Architecture Documents (Domain-Filtered, {domain_relevance:.0%} relevance)"
         print(f"[Cloud Agent] Using {len(filtered_chunks)} domain-filtered chunks.")
     else:
-        print("[Cloud Agent] No docs found — using baseline mode.")
-        context = "No cloud infrastructure documents available."
-        data_source = "General Knowledge (No Docs)"
+        print("[Cloud Agent] No cloud docs found — using general knowledge mode.")
+        context = ""
+        data_source = "General Architecture Knowledge (No Docs)"
 
     system_prompt = AGENT_SYSTEM_PROMPTS["cloud_architect"]
-    user_message  = build_user_message(context, query)
+    
+    # Build conversational user message
+    if context:
+        user_message = f"""Based on the cloud infrastructure documentation provided, answer the following question with practical, implementable recommendations:
 
-    print(f"[Cloud Agent] Calling LLM...")
+CLOUD INFRASTRUCTURE CONTEXT:
+{context}
+
+USER QUESTION:
+{query}
+
+Provide specific, document-backed infrastructure recommendations that directly address this question."""
+    else:
+        user_message = f"""Answer this cloud architecture question using general best practices and industry standards:
+
+USER QUESTION:
+{query}
+
+Provide practical infrastructure recommendations appropriate for the question asked."""
+
+    print(f"[Cloud Agent] Calling LLM for architecture analysis...")
     response = call_llm(system_prompt, user_message)
     print(f"[Cloud Agent] Analysis complete.")
 

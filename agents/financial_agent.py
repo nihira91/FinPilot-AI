@@ -13,6 +13,36 @@ load_dotenv()
 
 MODEL_ID = "gemini-2.5-flash"
 
+# Try importing visualization - optional feature
+try:
+    from utils.chart_generator import create_breakdown_pie, create_category_bar, create_timeseries_line
+    VISUALIZATION_AVAILABLE = True
+except ImportError:
+    VISUALIZATION_AVAILABLE = False
+
+
+CHART_INTENT_KEYWORDS = {
+    "cost": [
+        "cost", "expense", "breakdown", "split", "distribution", "composition",
+        "cost breakdown", "expense breakdown", "cost split", "where money goes",
+        "proportion", "allocation", "spending"
+    ],
+    "trend": [
+        "trend", "period", "quarter", "time", "over time", "temporal", "when",
+        "time-series", "quarterly", "trajectory", "evolution", "pattern",
+        "growth", "forecast", "progression", "movement"
+    ]
+}
+
+def detect_chart_intent(query: str) -> str:
+    """Detect chart intent from query using semantic keywords."""
+    query_lower = query.lower()
+    for intent, keywords in CHART_INTENT_KEYWORDS.items():
+        if any(kw in query_lower for kw in keywords):
+            print(f"[Financial Agent] Chart intent detected: {intent}")
+            return intent
+    return "default"
+
 
 def safe_format_value(val):
     """Safely convert values to string, handling None and special types."""
@@ -385,7 +415,7 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
             print(f"[Financial Agent] RAG query error: {str(e)}")
             context = "No document context available."
     else:
-        print(f"[Financial Agent] CSV data provided. Skipping RAG to avoid stale data interference.")
+        pass
     
     context = str(context)  # Force to string
 
@@ -394,7 +424,6 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     metrics_text = "No financial data provided. Analyze from documents only."
     
     if df is not None and not df.empty:
-        print(f"[Financial Agent] Using CSV data: {df.shape[0]} rows")
         try:
             metrics = compute_metrics(df, column_mapping=column_mapping)
             
@@ -435,14 +464,50 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
                 if "lowest_month" in trend and trend.get("lowest_month"):
                     metrics_lines.append(f"  Lowest Month: {safe_format_value(trend['lowest_month'])}")
             
+            # Add column metadata
+            metrics_lines.append("\n📊 AVAILABLE DATA STRUCTURE:")
+            metrics_lines.append(f"  Total Rows: {df.shape[0]}")
+            metrics_lines.append(f"  Total Columns: {df.shape[1]}")
+            metrics_lines.append(f"  Column Names: {', '.join(df.columns.tolist())}")
+            
+            # Detect date range if date column exists
+            date_cols = [col for col in df.columns if col.lower() in ['date', 'month', 'quarter', 'period']]
+            if date_cols:
+                date_col = date_cols[0]
+                try:
+                    df_temp = df.copy()
+                    # Use explicit format for month column (Jan-22 = Jan 2022)
+                    if date_col.lower() == 'month':
+                        df_temp[date_col] = pd.to_datetime(df_temp[date_col], format="%b-%y", errors='coerce')
+                    else:
+                        df_temp[date_col] = pd.to_datetime(df_temp[date_col], errors='coerce')
+                    
+                    # Filter out invalid dates
+                    valid_dates = df_temp[date_col].dropna()
+                    if not valid_dates.empty:
+                        date_range_min = valid_dates.min()
+                        date_range_max = valid_dates.max()
+                        # Double-check they're valid before using strftime
+                        if pd.notna(date_range_min) and pd.notna(date_range_max):
+                            try:
+                                metrics_lines.append(f"  Data Range: {date_range_min.strftime('%b-%Y')} to {date_range_max.strftime('%b-%Y')}")
+                            except Exception as date_err:
+                                print(f"[Financial Agent] Date formatting error: {date_err}")
+                except Exception as e:
+                    print(f"[Financial Agent] Date range detection error: {e}")
+            
+            # List categorical columns and their values
+            categorical_cols = [col for col in df.columns if df[col].dtype == 'object']
+            if categorical_cols:
+                metrics_lines.append(f"  Categories Available: {', '.join(categorical_cols)}")
+            
             metrics_text = "\n".join(metrics_lines) if metrics_lines else "Metrics computed from CSV data."
         except Exception as e:
             print(f"[Financial Agent] Error computing metrics: {str(e)}")
             metrics_text = "Metrics available from CSV data."
     else:
-        print("[Financial Agent] No CSV data provided. Analyzing from PDF context only.")
         metrics = {}
-        metrics_text = "No financial data provided. Analyze from documents only."
+        metrics_text = "No financial data provided."
 
     # Step 3: LLM interprets metrics ONLY (CSV takes priority over RAG)
     # Ensure all components are valid strings
@@ -450,10 +515,9 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     
     # If CSV data was provided, use ONLY that - don't confuse LLM with stale RAG context
     if has_csv_data:
-        # CSV data is primary source - NEVER mix with RAG context
-        context_instruction = "🔴 CRITICAL: IGNORE ANY GENERAL KNOWLEDGE. Use ONLY the computed metrics below. Do NOT reference documents or external knowledge."
+        # CSV data is primary source - suppress external context to prevent hallucination
         context_str = ""  # Suppress RAG context entirely when CSV provided
-        print(f"[Financial Agent] Using CSV-only mode. Suppressing all external context.")
+        print(f"[Financial Agent] Using CSV-only mode. Suppressing external context to ensure data accuracy.")
         data_source = "CSV"
     else:
         # No CSV data - use domain-filtered RAG context
@@ -474,53 +538,127 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     
     metrics_str = str(metrics_text) if metrics_text else "No metrics"
     
-    prompt = f"""You are a Financial Analyst AI agent in a multi-agent financial intelligence system.
+    prompt = f"""You are a Financial Analyst providing comprehensive financial analysis and strategic recommendations to business leadership.
 
-{context_instruction}
+When CSV data is provided, it is the primary authoritative source for all numerical claims. Ensure all figures reference the metrics provided below. For document-based analysis, use only the information explicitly contained in the retrieved context.
 
-MANDATORY RULES - BREAKING THESE CAUSES SYSTEM FAILURE:
-1. NEVER use your pre-trained knowledge or external data sources
-2. NEVER reference competitor data, industry benchmarks, or market reports
-3. NEVER make up numbers, trends, or calculations NOT in the metrics
-4. If data is missing, state: "Data not available" - do NOT assume or estimate
-5. EVERY number must be directly quoted from the COMPUTED METRICS section below
-6. If query asks for something not in metrics, state "Cannot answer - this data was not provided"
-
-{"RETRIEVED CONTEXT FROM DOCUMENTS (SUPPLEMENTARY ONLY):" + chr(10) + context_str + chr(10) if context_str else ""}
-
-COMPUTED FINANCIAL METRICS FROM CSV:
+FINANCIAL METRICS & DATA STRUCTURE:
 {metrics_str}
+
+{"SUPPLEMENTARY CONTEXT FROM DOCUMENTS:" + chr(10) + context_str + chr(10) if context_str else ""}
 
 USER QUERY:
 {query_str}
 
-Respond using EXACTLY this structure:
+ANALYSIS FRAMEWORK:
+1. Address the specific question directly with confidence based on available data
+2. Support all numerical claims with explicit references to the computed metrics above
+3. Provide context and business interpretation of the figures
+4. Clearly distinguish between what data shows and what cannot be determined from available information
+5. Format your response professionally for executive consumption
 
-## Financial Summary
-[2-3 sentences based ONLY on the metrics above. If metrics are absent, state that.]
+RESPONSE STRUCTURE:
+- Lead with a direct answer to the question
+- Present key supporting metrics with clear attribution
+- Provide analytical interpretation and business implications
+- Note any material data gaps relevant to a complete answer
+- Offer data-driven insights and recommendations where applicable
 
-## Key Metrics
-[Bullet list with EXACT numbers ONLY from "COMPUTED FINANCIAL METRICS" section]
+Quality Standards:
+- Every numerical claim must be traceable to the metrics provided
+- Avoid speculation or external knowledge not explicitly in the data
+- Use precise, professional language appropriate for financial stakeholders
+- Focus on actionable insights, not data limitations
 
-## Data Limitations
-[List what data is NOT available that would be needed to fully answer the query]
-
-## Budget Forecast
-[Only include if forecast data shows numbers. If empty, state "Forecast data not available"]
-
-## Recommendations
-[Numbered list based ONLY on metrics shown. If insufficient data, state "Recommendations not possible with available data"]
-
-## Source References
-[State "Analysis based on CSV data only" or list documents]
-
-⚠️ CRITICAL: Every single number in your response must appear in the metrics section above. If not, your answer is incorrect."""
+Deliver a comprehensive, data-backed response that directly addresses the user's question."""
 
     response = call_gemini(prompt)
     
     # Validate response against metrics to catch hallucination
     response = validate_response_against_metrics(response, metrics, query)
-    print(f"[Financial Agent] Analysis complete.")
+    response = call_llm(system_prompt, user_message)
+    visualization = None
+    if VISUALIZATION_AVAILABLE and df is not None and not df.empty:
+        try:
+            print(f"[Financial Agent] Generating visualization from query: {query}")
+            
+            # Detect chart intent from query (semantic)
+            chart_intent = detect_chart_intent(query)
+            
+            # Detect revenue column
+            revenue_col = None
+            for candidate in ["revenue", "sales_amount", "total_revenue"]:
+                if candidate in df.columns:
+                    revenue_col = candidate
+                    break
+            
+            if not revenue_col:
+                print(f"[Financial Agent] Could not detect revenue column for visualization")
+                visualization = None
+            else:
+                # Generate chart based on intent
+                if chart_intent == "cost" and "total_cogs" in metrics and "total_expenses" in metrics:
+                    cost_data = {
+                        "COGS": metrics.get("total_cogs", 0),
+                        "Operating Expenses": metrics.get("total_expenses", 0)
+                    }
+                    visualization = create_breakdown_pie(cost_data, title="Cost Breakdown")
+                    print(f"[Financial Agent] Cost breakdown visualization created")
+                
+                elif chart_intent in ["trend", "default"]:
+                    # Look for date column
+                    date_col = None
+                    for candidate in ["quarter", "month", "period"]:
+                        if candidate in df.columns:
+                            date_col = candidate
+                            break
+                    
+                    if date_col:
+                        period_revenue = df.groupby(date_col)[revenue_col].sum().to_dict()
+                        visualization = create_timeseries_line(period_revenue, title="Revenue Trend")
+                        print(f"[Financial Agent] Revenue trend visualization created")
+                    else:
+                        # Fallback to costs if available
+                        if "total_cogs" in metrics and "total_expenses" in metrics:
+                            cost_data = {
+                                "COGS": metrics.get("total_cogs", 0),
+                                "Operating Expenses": metrics.get("total_expenses", 0)
+                            }
+                            visualization = create_breakdown_pie(cost_data, title="Cost Breakdown")
+                            print(f"[Financial Agent] Cost visualization created")
+                        else:
+                            revenue_data = {revenue_col: float(df[revenue_col].sum())}
+                            visualization = create_category_bar(revenue_data, title="Total Revenue")
+                            print(f"[Financial Agent] Default revenue visualization created")
+                
+                # Fallback: Try to detect period data
+                if not visualization:
+                    date_col = None
+                    for candidate in ["quarter", "month", "period"]:
+                        if candidate in df.columns:
+                            date_col = candidate
+                            break
+                    
+                    if date_col:
+                        period_revenue = df.groupby(date_col)[revenue_col].sum().to_dict()
+                        visualization = create_timeseries_line(period_revenue, title="Revenue Trend")
+                        print(f"[Financial Agent] Revenue trend visualization created")
+                    elif "total_cogs" in metrics:
+                        cost_data = {
+                            "COGS": metrics.get("total_cogs", 0),
+                            "Operating Expenses": metrics.get("total_expenses", 0)
+                        }
+                        visualization = create_breakdown_pie(cost_data, title="Cost Breakdown")
+                        print(f"[Financial Agent] Cost breakdown visualization created")
+                    else:
+                        revenue_data = {revenue_col: float(df[revenue_col].sum())}
+                        visualization = create_category_bar(revenue_data, title="Total Revenue")
+                        print(f"[Financial Agent] Default visualization created")
+        
+        except Exception as e:
+            print(f"[Financial Agent] Visualization error: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     return {
         "agent": "Financial Analyst",
@@ -530,6 +668,7 @@ Respond using EXACTLY this structure:
         "response": response,
         "data_source": data_source,
         "confidence": "HIGH" if metrics else "MEDIUM",
+        "visualization": visualization,
     }
 
 
