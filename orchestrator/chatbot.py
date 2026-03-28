@@ -187,18 +187,23 @@ def clean_question_for_agent(question: str) -> str:
         Input: "what are sales trends? also visualize it"
         Output: "what are sales trends?"
     """
-    # Remove phrases with visualization keywords
+    # Remove only generic visualization tails while preserving business keywords
+    # (e.g. keep "cogs trend" in "tell and show the cogs trend").
     viz_phrases = [
-        r"\s*,?\s*also\s+(visualize|create|show|plot|chart|graph).*",
-        r"\s*\.\s*(visualize|create|show|plot|chart|graph).*",
-        r"\s*(visualize|create|show|plot|chart|graph)\s+it.*",
-        r"\s+(visualize|create|show|plot|chart|graph).*",
+        r"\s*,?\s*also\s+(visualize|create)\s+(it|this|that)\b.*$",
+        r"\s*,?\s*also\s+show\s+(it|this|that)\b.*$",
+        r"\s*\.\s*(visualize|create|show|plot|chart|graph)\s+(it|this|that)\b.*$",
+        r"\s*(visualize|create|show|plot|chart|graph)\s+(it|this|that)\b.*$",
     ]
     
     import re
-    cleaned = question
+    cleaned = str(question)
     for phrase in viz_phrases:
         cleaned = re.sub(phrase, "", cleaned, flags=re.IGNORECASE)
+
+    # If cleanup removed too much, keep the original question to preserve intent.
+    if len(cleaned.strip()) < 4:
+        cleaned = str(question)
     
     # Clean up extra spaces and punctuation
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()

@@ -83,6 +83,11 @@ html, body, .stApp {
 }
 [data-testid="stSidebar"] * { color: var(--text-primary) !important; }
 
+/* Hide sidebar collapse/expand toggle */
+[data-testid="stSidebarCollapseButton"] {
+    display: none !important;
+}
+
 /* ── Sidebar Header ── */
 .sidebar-logo {
     text-align: center;
@@ -707,7 +712,7 @@ chat_container = st.container()
 
 # Display chat history
 with chat_container:
-    for msg in st.session_state.chat_history:
+    for msg_idx, msg in enumerate(st.session_state.chat_history):
         if msg["role"] == "user":
             st.markdown(f"""
             <div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem;">
@@ -732,7 +737,8 @@ with chat_container:
             if msg.get("visualizations"):
                 for agent, fig in msg["visualizations"].items():
                     with st.expander(f"📊 {agent.title()} Chart", expanded=True):
-                        st.plotly_chart(fig, use_container_width=True)
+                        chart_key = f"chart_{msg_idx}_{agent}"
+                        st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 st.markdown("---")
 
