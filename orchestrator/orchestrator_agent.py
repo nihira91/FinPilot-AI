@@ -18,6 +18,42 @@ load_dotenv()
 MODEL_ID = "gemini-2.5-flash"
 
 
+ROUTING_EXAMPLES = """
+ROUTING EXAMPLES:
+
+FINANCIAL AGENT EXAMPLES:
+- "Analyze the company's quarterly financial performance" → financial
+- "What is the profit trend over the last four quarters" → financial
+- "Identify cost anomalies in the financial data" → financial
+- "Suggest ways to improve profitability based on financial data" → financial
+
+SALES AGENT EXAMPLES:
+- "Analyze the sales growth trend over the past year" → sales
+- "Which region generated the highest sales" → sales
+- "Identify seasonal sales patterns in the dataset" → sales
+- "Detect anomalies in the sales data" → sales
+
+INVESTMENT AGENT EXAMPLES:
+- "Summarize the key insights from the consultant reports" → investment
+- "Suggest an expansion strategy based on the strategy documents" → investment
+- "Identify potential investment opportunities mentioned in the reports" → investment
+- "What risks are highlighted in the consultant analysis" → investment
+
+CLOUD AGENT EXAMPLES:
+- "Recommend a scalable cloud architecture for 1 million users" → cloud
+- "Suggest AWS services suitable for a data analytics platform" → cloud
+- "Provide a cost optimized cloud deployment strategy" → cloud
+- "Design a scalable infrastructure for a growing SaaS application" → cloud
+
+MULTI-AGENT EXAMPLES:
+- "Analyze our financial performance and suggest an expansion strategy" → financial,investment
+- "Based on sales trends and financial data recommend a growth plan" → financial,sales,investment
+- "Evaluate company performance and suggest infrastructure scaling" → financial,sales,cloud
+- "Provide a complete business intelligence report for the company" → financial,sales,investment,cloud
+- "Analyze quarterly sales and recommend investment opportunities" → sales,investment
+"""
+
+
 def extract_routes_from_text(text: str) -> list:
     """Extract valid agent names from free-form LLM text while preserving order."""
     lowered = (text or "").lower()
@@ -86,54 +122,80 @@ def orchestrator_node(state: AgentState):
     
     print(f"\n[Orchestrator] Query received: {query}")
 
-    chunks  = rag_query("routing_rules", query, top_k=5)
-    context = format_context(chunks)
+    # Orchestrator prompt with examples for routing context
+    orchestrator_prompt = f"""
+    You are an orchestrator routing user queries to specialized financial agents.
+    
+    {ROUTING_EXAMPLES}
+    
+    USER QUERY: {query}
+    
+    Based on the examples above, decide which agents should handle this query.
+    """
+    
+    # Store prompt in state for reference
+    state["orchestrator_prompt"] = orchestrator_prompt
 
-    prompt = f"""You are an orchestrator of a financial AI system.
-Based on the routing rules and the query, decide which agents are needed.
-
-ROUTING RULES AND EXAMPLES:
-{context}
-
-QUERY: {query}
-
-Respond with ONLY agent names separated by comma. Nothing else.
-Example: financial
-Example: financial,investment"""
-    response = call_gemini(prompt, max_tokens=100).strip()
-    routes = extract_routes_from_text(response)
-
-    # If user explicitly names domains, keep those routes even if LLM under-selects.
-    for agent in extract_routes_from_text(query):
-        if agent not in routes:
-            routes.append(agent)
-
-    # Safety keyword check
+    # RULE-BASED ROUTING (replaces RAG for better accuracy)
     query_lower = query.lower()
-
-    # Use keyword fallback only when LLM produced no usable routes.
-    if not routes:
-        sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal", "pattern", "trend", "anomal", "customer", "order", "conversion"]
-        fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue", "forecast", "cash", "balance", "margin"]
-        inv_keywords   = ["investment", "portfolio", "expansion", "strategy", "risk", "consultant"]
-        cloud_keywords = ["cloud", "aws", "gcp", "infrastructure", "scalab", "deployment"]
-
-        if any(k in query_lower for k in sales_keywords):
-            routes.append("sales")
-        if any(k in query_lower for k in inv_keywords):
-            routes.append("investment")
-        if any(k in query_lower for k in fin_keywords):
-            routes.append("financial")
-        if any(k in query_lower for k in cloud_keywords):
-            routes.append("cloud")
-        
-    # Final fallback if still ambiguous
+    routes = []
+    
+    # Define comprehensive routing keywords
+    financial_keywords = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue", "forecast", "cash", "balance", "margin", "profitability", "performance", "revenue trend", "revenue generation"]
+    sales_keywords     = ["sales", "region", "product performance", "seasonal", "pattern", "trend", "anomal", "customer", "order", "conversion", "sales growth", "sales trend"]
+    investment_keywords = ["investment", "portfolio", "expansion", "strategy", "risk", "consultant", "strategic", "growth", "opportunity", "market", "expansion strategy", "growth strategy"]
+    cloud_keywords     = ["cloud", "aws", "gcp", "infrastructure", "scalab", "deployment", "saas", "high availability", "traffic", "scaling"]
+    
+    # Check for each domain
+    found_financial = any(k in query_lower for k in financial_keywords)
+    found_sales     = any(k in query_lower for k in sales_keywords)
+    found_investment = any(k in query_lower for k in investment_keywords)
+    found_cloud     = any(k in query_lower for k in cloud_keywords)
+    
+    # Multi-domain routing logic (matching your routing rules)
+    domain_count = sum([found_financial, found_sales, found_investment, found_cloud])
+    
+    # If query mentions company performance broadly (3+ domains)
+    if domain_count >= 3:
+        routes = ["financial", "sales", "investment"]
+        print(f"[Orchestrator] Multi-domain query detected (3+ domains) → routing to financial,sales,investment")
+    
+    # If query mentions complete business intelligence (cloud + others)
+    elif found_cloud and domain_count >= 2:
+        routes = ["financial", "sales", "investment", "cloud"]
+        print(f"[Orchestrator] Business intelligence + cloud → routing to all agents")
+    
+    # Two-domain combinations
+    elif found_financial and found_investment:
+        routes = ["financial", "investment"]
+        print(f"[Orchestrator] Financial + Investment domains")
+    elif found_financial and found_sales:
+        routes = ["financial", "sales"]
+        print(f"[Orchestrator] Financial + Sales domains")
+    elif found_sales and found_investment:
+        routes = ["sales", "investment"]
+        print(f"[Orchestrator] Sales + Investment domains")
+    elif found_sales and found_cloud:
+        routes = ["sales", "cloud"]
+        print(f"[Orchestrator] Sales + Cloud domains")
+    
+    # Single domain
+    elif found_financial:
+        routes = ["financial"]
+    elif found_sales:
+        routes = ["sales"]
+    elif found_investment:
+        routes = ["investment"]
+    elif found_cloud:
+        routes = ["cloud"]
+    
+    # Final fallback if still no routes matched
     if not routes:
         if uploaded_pdf_agents:
-            print(f"[Orchestrator] Ambiguous query - defaulting to uploaded PDF agents: {uploaded_pdf_agents}")
+            print(f"[Orchestrator] No keywords matched - defaulting to uploaded PDF agents: {uploaded_pdf_agents}")
             routes = uploaded_pdf_agents
         else:
-            print("[Orchestrator] Ambiguous query - defaulting to financial,sales,investment")
+            print("[Orchestrator] No keywords matched - defaulting to financial,sales,investment")
             routes = ["financial", "sales", "investment"]
     
     # Deduplicate routes
@@ -141,7 +203,7 @@ Example: financial,investment"""
 
     route = "multi_agent" if len(routes) > 1 else routes[0]
 
-    print(f"[Orchestrator] Routing to: {routes}")
+    print(f"[Orchestrator] Final routing: {routes}")
     return {"route": route, "routes": routes}
 
 
