@@ -84,6 +84,13 @@ def build_collection(collection_name: str, session_id: str = None) -> None:
         return
 
     chunks = chunk_documents(documents)    
+    if not chunks:
+        print(
+            f"[pipeline] No text chunks created for '{collection_name}'. "
+            "PDFs may be scanned/image-only or unreadable."
+        )
+        return
+
     add_chunks_to_collection(collection_name, chunks)  
     print(f"[pipeline] Collection '{collection_name}' ({collection_type}) is ready.\n")
 

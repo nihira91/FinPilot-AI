@@ -285,15 +285,12 @@ def process_chat_question(
         routed_agents = route_query(question)
     
     # Step 1.5: Filter agents based on available data
-    # Only remove agents that explicitly require CSVs (financial, sales) when their
-    # corresponding CSV is missing. Keep non-CSV agents (investment, cloud).
+    # Financial can run with CSV or PDF RAG context, so do not drop it when CSV is missing.
+    # Sales currently requires CSV. Investment/cloud do not require CSV.
     filtered_agents = []
     for a in routed_agents:
         if a == "financial":
-            if financial_csv is not None and not financial_csv.empty:
-                filtered_agents.append(a)
-            else:
-                print(f"[Chatbot] Dropping 'financial' route - no financial CSV provided")
+            filtered_agents.append(a)
         elif a == "sales":
             if sales_csv is not None and not sales_csv.empty:
                 filtered_agents.append(a)
@@ -362,7 +359,10 @@ def process_chat_question(
     
     # Safety check: if no responses, provide helpful message
     if not responses:
-        final_answer = "No data available for analysis. Please upload CSV files for the data you want to analyze (financial, sales, etc.)"
+        final_answer = (
+            "No data available for analysis. Please upload source data: "
+            "CSV for sales analysis, or readable PDFs for financial/investment/cloud analysis."
+        )
         agents_summary = "NO DATA"
     
     # Step 3: Synthesize final answer (optional - combine if multiple agents)
