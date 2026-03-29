@@ -38,6 +38,10 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
 
     print(f"\n[Financial Agent] Query received: {query}")
 
+    # Retrieval quality guard: high cosine distance usually means weak relevance.
+    # We use this to avoid forcing unrelated PDF chunks into the answer.
+    max_acceptable_distance = 1.05
+
     # Step 1: Check if CSV data provided FIRST (takes absolute priority).
     has_csv_data = df is not None and not df.empty
     print(f"[Financial Agent] CSV data available: {has_csv_data}")
@@ -151,16 +155,63 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
     # Step 4: LLM interprets metrics ONLY (CSV takes priority over RAG).
     query_str = str(query) if query else "No query provided"
 
-    # If CSV data was provided, use ONLY that.
+    # If CSV data was provided, use it as primary truth and optionally enrich with document context.
     if has_csv_data:
-        # CSV data is primary source - suppress external context to prevent hallucination.
         context_str = ""
-        print("[Financial Agent] Using CSV-only mode. Suppressing external context to ensure data accuracy.")
         data_source = "CSV"
+        try:
+            filtered_chunks, domain_relevance = query_with_domain_filter(
+                "financial_reports", query, domain="financial", top_k=5
+            )
+            if filtered_chunks:
+                best_distance = min(c.get("distance", 9.9) for c in filtered_chunks)
+                if best_distance <= max_acceptable_distance:
+                    context_str = format_context(filtered_chunks)
+                    data_source = f"CSV (Primary) + RAG Documents (Supplementary, {domain_relevance:.0%} relevance)"
+                    print("[Financial Agent] Using hybrid mode: CSV primary + supplementary RAG context.")
+                else:
+                    print(
+                        "[Financial Agent] Retrieved PDF chunks are weakly relevant "
+                        f"(best distance={best_distance}). Using CSV-only mode."
+                    )
+            else:
+                print("[Financial Agent] Using CSV-primary mode (no supplementary document chunks found).")
+        except Exception as e:
+            print(f"[Financial Agent] Supplementary RAG retrieval failed in CSV mode: {e}")
+            print("[Financial Agent] Falling back to CSV-only mode.")
     else:
         # No CSV data - use domain-filtered RAG context.
         try:
             filtered_chunks, domain_relevance = query_with_domain_filter("financial_reports", query, domain="financial", top_k=10)
+            if not filtered_chunks:
+                return {
+                    "agent": "Financial Analyst",
+                    "agent_domain": "Financial Performance Analysis",
+                    "query": query,
+                    "metrics": {},
+                    "response": (
+                        "I couldn't find any relevant financial document context for this query. "
+                        "Please upload readable PDFs to financial_reports and rebuild embeddings."
+                    ),
+                    "data_source": "No Documents Available",
+                    "confidence": "LOW",
+                    "visualization": None,
+                }
+            best_distance = min(c.get("distance", 9.9) for c in filtered_chunks)
+            if best_distance > max_acceptable_distance:
+                return {
+                    "agent": "Financial Analyst",
+                    "agent_domain": "Financial Performance Analysis",
+                    "query": query,
+                    "metrics": {},
+                    "response": (
+                        "I found financial PDFs, but the retrieved passages are not relevant enough to answer this question reliably. "
+                        "Please ask a more specific query tied to your uploaded document content."
+                    ),
+                    "data_source": "RAG Documents (Low Relevance)",
+                    "confidence": "LOW",
+                    "visualization": None,
+                }
             context = format_context(filtered_chunks) if filtered_chunks else ""
             context_str = str(context) if context else "No context available"
             print(f"[Financial Agent] Using RAG-only mode with domain filtering (relevance: {domain_relevance:.2%}).")
@@ -171,15 +222,26 @@ def run(query: str, df: pd.DataFrame = None, column_mapping: dict = None) -> dic
             data_source = "RAG (Fallback)"
 
     metrics_str = str(metrics_text) if metrics_text else "No metrics"
+    sources = []
+    if context_str:
+        try:
+            sources = sorted({c.get("source", "unknown") for c in filtered_chunks if c.get("source")})
+        except Exception:
+            sources = []
+    sources_text = ", ".join(sources) if sources else "None"
 
     prompt = f"""You are a Financial Analyst providing comprehensive financial analysis and strategic recommendations to business leadership.
 
 When CSV data is provided, it is the primary authoritative source for all numerical claims. Ensure all figures reference the metrics provided below. For document-based analysis, use only the information explicitly contained in the retrieved context.
+If context is insufficient, explicitly say so and do not use outside knowledge.
 
 FINANCIAL METRICS & DATA STRUCTURE:
 {metrics_str}
 
 {"SUPPLEMENTARY CONTEXT FROM DOCUMENTS:" + chr(10) + context_str + chr(10) if context_str else ""}
+
+AVAILABLE DOCUMENT SOURCES:
+{sources_text}
 
 USER QUERY:
 {query_str}
@@ -203,6 +265,7 @@ Quality Standards:
 - Avoid speculation or external knowledge not explicitly in the data
 - Use precise, professional language appropriate for financial stakeholders
 - Focus on actionable insights, not data limitations
+- For every document-based claim, cite at least one source filename in parentheses, e.g., (Source: report.pdf)
 
 Deliver a comprehensive, data-backed response that directly addresses the user's question."""
 

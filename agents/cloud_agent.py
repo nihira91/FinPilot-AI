@@ -30,20 +30,28 @@ def run(query: str) -> dict:
         COLLECTION_NAME, query, domain="cloud", top_k=TOP_K
     )
     
-    if filtered_chunks:
-        context = format_context(filtered_chunks)
-        data_source = f"Cloud Architecture Documents (Domain-Filtered, {domain_relevance:.0%} relevance)"
-        print(f"[Cloud Agent] Using {len(filtered_chunks)} domain-filtered chunks.")
-    else:
-        print("[Cloud Agent] No cloud docs found — using general knowledge mode.")
-        context = ""
-        data_source = "General Architecture Knowledge (No Docs)"
+    if not filtered_chunks:
+        print("[Cloud Agent] No cloud docs found — returning no-context warning.")
+        return {
+            "agent": "Cloud Architect",
+            "agent_domain": "Cloud Infrastructure & Deployment",
+            "query": query,
+            "response": (
+                "I couldn't find relevant cloud documentation for this query. "
+                "Please upload readable cloud PDFs and rebuild embeddings before requesting architecture recommendations."
+            ),
+            "data_source": "No Documents Available",
+            "confidence": "LOW",
+        }
+
+    context = format_context(filtered_chunks)
+    data_source = f"Cloud Architecture Documents (Domain-Filtered, {domain_relevance:.0%} relevance)"
+    print(f"[Cloud Agent] Using {len(filtered_chunks)} domain-filtered chunks.")
 
     system_prompt = AGENT_SYSTEM_PROMPTS["cloud_architect"]
     
     # Build conversational user message
-    if context:
-        user_message = f"""Based on the cloud infrastructure documentation provided, answer the following question with practical, implementable recommendations:
+    user_message = f"""Based on the cloud infrastructure documentation provided, answer the following question with practical, implementable recommendations:
 
 CLOUD INFRASTRUCTURE CONTEXT:
 {context}
@@ -52,13 +60,6 @@ USER QUESTION:
 {query}
 
 Provide specific, document-backed infrastructure recommendations that directly address this question."""
-    else:
-        user_message = f"""Answer this cloud architecture question using general best practices and industry standards:
-
-USER QUESTION:
-{query}
-
-Provide practical infrastructure recommendations appropriate for the question asked."""
 
     print(f"[Cloud Agent] Calling LLM for architecture analysis...")
     response = call_llm(system_prompt, user_message)

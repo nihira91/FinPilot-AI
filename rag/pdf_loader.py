@@ -4,18 +4,21 @@ from pypdf import PdfReader   # PdfReader opens a PDF and gives a list of Page o
 
 
 def load_pdf(file_path: str) -> str:
-   
-    reader = PdfReader(file_path)
-    # reader.pages  →  list of Page objects, one per physical page in the PDF
+    try:
+        reader = PdfReader(file_path)
+        # reader.pages  -> list of Page objects, one per physical page in the PDF
+        all_text = []
 
-    all_text = []
-    for page in reader.pages:
-        text = page.extract_text()   # pulls raw text from a single page
-        if text:                     # some pages are image-only and return None
-            all_text.append(text)
+        for page in reader.pages:
+            text = page.extract_text()   # pulls raw text from a single page
+            if text:                     # some pages are image-only and return None
+                all_text.append(text)
 
-    # "\n".join(...) keeps page breaks readable as newlines
-    return "\n".join(all_text)
+        # "\n".join(...) keeps page breaks readable as newlines
+        return "\n".join(all_text).strip()
+    except Exception as e:
+        print(f"[pdf_loader] ERROR reading '{os.path.basename(file_path)}': {e}")
+        return ""
 
 
 def load_all_pdfs(folder_path: str) -> dict:
@@ -30,7 +33,11 @@ def load_all_pdfs(folder_path: str) -> dict:
         if filename.lower().endswith(".pdf"):        # skip .DS_Store, .txt, etc.
             full_path = os.path.join(folder_path, filename)
             print(f"[pdf_loader] Loading: {filename}")
-            documents[filename] = load_pdf(full_path)
+            text = load_pdf(full_path)
+            if not text:
+                print(f"[pdf_loader] WARNING: No extractable text in '{filename}' (possibly scanned/image-only).")
+                continue
+            documents[filename] = text
 
     print(f"[pdf_loader] Loaded {len(documents)} PDF(s) from {folder_path}")
     return documents
