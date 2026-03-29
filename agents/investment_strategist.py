@@ -1,31 +1,17 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# investment_strategist.py  —  Investment Strategist Agent
-#
-# PURPOSE : Analyse investment documents and return structured recommendations.
-#
-# FLOW (every time the Orchestrator calls this agent):
-#   1. Receive a query (e.g. "What expansion markets are recommended?")
-#   2. Call rag_query("investment_reports", query) → get relevant chunks
-#   3. Format chunks as readable context text
-#   4. Build prompt = system instructions + context + query
-#   5. Call HuggingFace LLM with that prompt
-#   6. Return a structured dict with the analysis + metadata
-#
-# THIS AGENT ONLY TOUCHES "investment_reports" COLLECTION.
-# Other agents use their own collections — separation keeps results clean.
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 from rag.pipeline          import rag_query, format_context
+from rag.vector_store      import query_with_domain_filter
 from rag.prompt_templates  import AGENT_SYSTEM_PROMPTS, build_user_message
 from rag.hf_llm            import call_llm
 
 
 # Pull this agent's system prompt from the shared templates file
-# (defined in rag/prompt_templates.py so the whole team uses a consistent format)
+
 SYSTEM_PROMPT = AGENT_SYSTEM_PROMPTS["investment_strategist"]
 
 
-def run(query: str, top_k: int = 5) -> dict:
+def run(query: str, top_k: int = 10) -> dict:
     """
     Main entry point for the Investment Strategist Agent.
 
@@ -34,7 +20,7 @@ def run(query: str, top_k: int = 5) -> dict:
     Args:
         query  : the task/question from the Orchestrator
                  e.g. "Summarise expansion opportunities from consultant reports"
-        top_k  : how many document chunks to retrieve as context (default 5)
+        top_k  : how many document chunks to retrieve as context (default 10 for better context)
 
     Returns:
         {
@@ -50,47 +36,52 @@ def run(query: str, top_k: int = 5) -> dict:
     """
     print(f"\n[Investment Strategist] Query received: {query}")
 
-    # ── Step 1 : Retrieve relevant chunks from the RAG pipeline ───────────────
-    # We pass "investment_reports" — this agent ONLY reads from its own collection.
-    chunks = rag_query("investment_reports", query, top_k=top_k)
+    # Retrieve relevant chunks from the RAG pipeline with domain filtering
+    filtered_chunks, domain_relevance = query_with_domain_filter(
+        "investment_reports", query, domain="investment", top_k=top_k
+    )
 
-    if not chunks:
-        # Graceful failure: return a clear message instead of crashing
+    if not filtered_chunks:
         print("[Investment Strategist] No relevant documents found.")
         return {
             "agent":       "Investment Strategist",
+            "agent_domain": "Investment Strategy & Portfolio Analysis",
             "query":       query,
             "response":    "No relevant investment documents found in the knowledge base. "
                            "Please add consultant reports or investment PDFs to "
                            "docs/investment_reports/ and run build_collection().",
             "sources":     [],
-            "chunks_used": 0
+            "chunks_used": 0,
+            "data_source": "No Documents Available",
+            "confidence": "LOW",
         }
 
-    # ── Step 2 : Format chunks into readable context text ─────────────────────
-    # format_context() turns the list of dicts into a clean annotated string
-    # with source citations that the LLM can reference in its answer.
-    context = format_context(chunks)
+    # Format chunks into readable context text 
+ 
+    context = format_context(filtered_chunks)
 
     # Collect unique source filenames for the metadata we return
-    sources = list({chunk["source"] for chunk in chunks})
+    sources = list({chunk["source"] for chunk in filtered_chunks})
 
-    # ── Step 3 : Build the user message ───────────────────────────────────────
+    #  Build the user message
     # build_user_message() injects context BEFORE the question — standard RAG pattern.
     # The LLM reads "here is relevant information, now answer the question."
     user_message = build_user_message(context, query)
 
-    # ── Step 4 : Call the LLM ─────────────────────────────────────────────────
-    print(f"[Investment Strategist] Calling LLM with {len(chunks)} context chunks …")
+    #  Call the LLM 
+    print(f"[Investment Strategist] Calling LLM with {len(filtered_chunks)} context chunks (domain relevance: {domain_relevance:.0%})…")
     llm_response = call_llm(SYSTEM_PROMPT, user_message)
 
     print(f"[Investment Strategist] Analysis complete. Sources used: {sources}")
 
-    # ── Step 5 : Return structured result to Orchestrator ─────────────────────
+    # Return structured result to Orchestrator 
     return {
         "agent":       "Investment Strategist",
+        "agent_domain": "Investment Strategy & Portfolio Analysis",
         "query":       query,
         "response":    llm_response,
         "sources":     sources,
-        "chunks_used": len(chunks)
+        "chunks_used": len(filtered_chunks),
+        "data_source": f"RAG Documents (Domain-Filtered, {domain_relevance:.0%} relevance)",
+        "confidence": "HIGH" if domain_relevance > 0.5 else "MEDIUM",
     }

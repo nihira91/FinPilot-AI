@@ -4,11 +4,12 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from rag.pipeline import build_collection, rag_query, format_context
+from rag.vector_store import query_with_domain_filter
 from rag.prompt_templates import AGENT_SYSTEM_PROMPTS, build_user_message
 from rag.hf_llm import call_llm
 
 COLLECTION_NAME = "cloud_docs"
-TOP_K           = 5
+TOP_K           = 10
 
 
 def build_cloud_index() -> None:
@@ -20,35 +21,56 @@ def build_cloud_index() -> None:
 def run(query: str) -> dict:
     """
     Main entry point — called by Orchestrator.
-    Returns dict with 'response' key.
+    Returns dict with 'response' key and agent metadata.
     """
     print(f"\n[Cloud Agent] Query received: {query}")
 
-    chunks  = rag_query(COLLECTION_NAME, query, top_k=TOP_K)
-    context = format_context(chunks)
-
-    # Fallback if collection empty
-    if not chunks:
-        print("[Cloud Agent] No docs found — using baseline mode.")
-        system_prompt = AGENT_SYSTEM_PROMPTS["cloud_architect"]
-        user_message  = (
-            f"Answer using general knowledge.\n\nQuery: {query}\n\n"
-            f"Provide structured response covering:\n"
-            f"Infrastructure Summary, Architecture Recommendations, "
-            f"Cost Optimisation, Scalability Roadmap."
-        )
+    # Use domain-filtered RAG
+    filtered_chunks, domain_relevance = query_with_domain_filter(
+        COLLECTION_NAME, query, domain="cloud", top_k=TOP_K
+    )
+    
+    if filtered_chunks:
+        context = format_context(filtered_chunks)
+        data_source = f"Cloud Architecture Documents (Domain-Filtered, {domain_relevance:.0%} relevance)"
+        print(f"[Cloud Agent] Using {len(filtered_chunks)} domain-filtered chunks.")
     else:
-        system_prompt = AGENT_SYSTEM_PROMPTS["cloud_architect"]
-        user_message  = build_user_message(context, query)
+        print("[Cloud Agent] No cloud docs found — using general knowledge mode.")
+        context = ""
+        data_source = "General Architecture Knowledge (No Docs)"
 
-    print(f"[Cloud Agent] Calling LLM with {len(chunks)} chunks...")
+    system_prompt = AGENT_SYSTEM_PROMPTS["cloud_architect"]
+    
+    # Build conversational user message
+    if context:
+        user_message = f"""Based on the cloud infrastructure documentation provided, answer the following question with practical, implementable recommendations:
+
+CLOUD INFRASTRUCTURE CONTEXT:
+{context}
+
+USER QUESTION:
+{query}
+
+Provide specific, document-backed infrastructure recommendations that directly address this question."""
+    else:
+        user_message = f"""Answer this cloud architecture question using general best practices and industry standards:
+
+USER QUESTION:
+{query}
+
+Provide practical infrastructure recommendations appropriate for the question asked."""
+
+    print(f"[Cloud Agent] Calling LLM for architecture analysis...")
     response = call_llm(system_prompt, user_message)
     print(f"[Cloud Agent] Analysis complete.")
 
     return {
-        "agent":    "Cloud Architect",
-        "query":    query,
+        "agent": "Cloud Architect",
+        "agent_domain": "Cloud Infrastructure & Deployment",
+        "query": query,
         "response": response,
+        "data_source": data_source,
+        "confidence": "HIGH" if filtered_chunks else "MEDIUM",
     }
 
 

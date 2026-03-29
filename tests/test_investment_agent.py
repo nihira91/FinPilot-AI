@@ -1,16 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# test_investment_agent.py  —  Step 7 : Test Investment Agent independently
-#
-# PURPOSE : Verify the Investment Strategist Agent produces a valid response
-#           without relying on real PDFs or live API calls (optional mock mode).
-#
-# HOW TO RUN :
-#   # With real HuggingFace API (needs HF_API_TOKEN in .env):
-#   python tests/test_investment_agent.py
-#
-#   # Without API (mock LLM response — checks structure only):
-#   MOCK_LLM=true python tests/test_investment_agent.py
-# ─────────────────────────────────────────────────────────────────────────────
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -49,8 +36,8 @@ MOCK_INVESTMENT_CHUNKS = [
 
 
 def test_rag_retrieval_for_agent():
-    """Step 7a — Verify agent retrieves correct chunks before calling LLM."""
-    print("\n── TEST 7a : RAG Retrieval for Investment Agent ─────────────")
+    """ Verify agent retrieves correct chunks before calling LLM."""
+    print("\n  RAG Retrieval for Investment Agent")
 
     # Inject mock data directly — no real PDFs needed
     add_chunks_to_collection("investment_reports", MOCK_INVESTMENT_CHUNKS)
@@ -69,10 +56,10 @@ def test_rag_retrieval_for_agent():
 
 def test_agent_full_run_with_mock_llm():
     """
-    Step 7b — Test full agent pipeline with a MOCKED LLM response.
+     Test full agent pipeline with a MOCKED LLM response.
     This lets us test the pipeline structure without needing an API token.
     """
-    print("\n── TEST 7b : Full Agent Run (mocked LLM) ────────────────────")
+    print("\n Full Agent Run (mocked LLM)")
 
     import unittest.mock as mock
 
@@ -114,10 +101,10 @@ exposure is recommended alongside technology sector positions.
     assert len(result["response"]) > 50,   "Response should be a full analysis"
     assert isinstance(result["sources"], list), "Sources must be a list"
 
-    print(f"✓ Agent name    : {result['agent']}")
-    print(f"✓ Chunks used   : {result['chunks_used']}")
-    print(f"✓ Sources       : {result['sources']}")
-    print(f"✓ Response length: {len(result['response'])} characters")
+    print(f" Agent name    : {result['agent']}")
+    print(f" Chunks used   : {result['chunks_used']}")
+    print(f" Sources       : {result['sources']}")
+    print(f" Response length: {len(result['response'])} characters")
     print(f"\n  RESPONSE PREVIEW:\n{result['response'][:400]} …")
 
 
@@ -127,12 +114,12 @@ def test_agent_with_live_api():
     Only runs if HF_API_TOKEN is set in the environment.
     Skip this if you don't have a token yet.
     """
-    print("\n── TEST 7c : Full Agent Run (live HuggingFace API) ──────────")
+    print("\n Full Agent Run (live HuggingFace API) ")
 
     token = os.getenv("HF_API_TOKEN") or __import__("dotenv").dotenv_values(".env").get("HF_API_TOKEN")
 
     if not token or token == "hf_your_token_here":
-        print("⚠  HF_API_TOKEN not set — skipping live API test.")
+        print(" HF_API_TOKEN not set — skipping live API test.")
         print("   Add your token to .env to run this test.")
         return
 
@@ -148,7 +135,7 @@ def test_agent_with_live_api():
     assert "[LLM Error]" not in result["response"], \
         f"LLM returned an error: {result['response']}"
 
-    print(f"✓ Live API test passed!")
+    print(f" Live API test passed!")
     print(f"  Sources : {result['sources']}")
     print(f"\n  FULL RESPONSE:\n{result['response']}")
 
