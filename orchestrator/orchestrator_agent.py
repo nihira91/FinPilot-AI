@@ -11,10 +11,18 @@ from agents.sales_agent import run as sales_run
 from agents.cloud_agent import run as cloud_run
 from utils.chart_generator import create_breakdown_pie, create_category_bar, create_timeseries_line
 import json
+import re
 
 load_dotenv()
 
 MODEL_ID = "gemini-2.5-flash"
+
+
+def extract_routes_from_text(text: str) -> list:
+    """Extract valid agent names from free-form LLM text while preserving order."""
+    lowered = (text or "").lower()
+    matches = re.findall(r"\b(financial|sales|investment|cloud)\b", lowered)
+    return list(dict.fromkeys(matches))
 
 
 def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
@@ -60,11 +68,13 @@ class AgentState(TypedDict, total=False):
     financial_result: Optional[dict]
     sales_result: Optional[dict]
     investment_result: Optional[dict]
+    uploaded_pdf_agents: Optional[list]
 
 
 # Orchestrator Node 
 def orchestrator_node(state: AgentState):
     query = state["query"]
+    uploaded_pdf_agents = state.get("uploaded_pdf_agents") or []
     
     # Ensure query is valid string 
     if query is None:
@@ -90,23 +100,19 @@ QUERY: {query}
 Respond with ONLY agent names separated by comma. Nothing else.
 Example: financial
 Example: financial,investment"""
-    response = call_gemini(prompt, max_tokens=100).lower().strip()
+    response = call_gemini(prompt, max_tokens=100).strip()
+    routes = extract_routes_from_text(response)
 
-    valid  = ["financial", "sales", "investment", "cloud"]
-    routes = [r.strip() for r in response.split(",") if r.strip() in valid]
+    # If user explicitly names domains, keep those routes even if LLM under-selects.
+    for agent in extract_routes_from_text(query):
+        if agent not in routes:
+            routes.append(agent)
 
-    #  Ambiguous fallback 
-    if not routes:
-        print("[Orchestrator] Ambiguous query — defaulting to financial,sales,investment")
-        routes = ["financial", "sales", "investment"]
-
-    #Safety keyword check - only add if LLM didn't already route it
+    # Safety keyword check
     query_lower = query.lower()
 
-    # Only add if definitely not covered by LLM routing
-    # AND query doesn't already have a clear single route
-    if len(routes) == 0:
-        # Only use keywords if LLM routing returned nothing
+    # Use keyword fallback only when LLM produced no usable routes.
+    if not routes:
         sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal", "pattern", "trend", "anomal", "customer", "order", "conversion"]
         fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue", "forecast", "cash", "balance", "margin"]
         inv_keywords   = ["investment", "portfolio", "expansion", "strategy", "risk", "consultant"]
@@ -121,12 +127,17 @@ Example: financial,investment"""
         if any(k in query_lower for k in cloud_keywords):
             routes.append("cloud")
         
-        if not routes:
-            # Final fallback if no keywords matched
-            routes = ["financial"]
+    # Final fallback if still ambiguous
+    if not routes:
+        if uploaded_pdf_agents:
+            print(f"[Orchestrator] Ambiguous query - defaulting to uploaded PDF agents: {uploaded_pdf_agents}")
+            routes = uploaded_pdf_agents
+        else:
+            print("[Orchestrator] Ambiguous query - defaulting to financial,sales,investment")
+            routes = ["financial", "sales", "investment"]
     
     # Deduplicate routes
-    routes = list(set(routes))
+    routes = list(dict.fromkeys(routes))
 
     route = "multi_agent" if len(routes) > 1 else routes[0]
 
