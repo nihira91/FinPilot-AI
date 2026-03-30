@@ -102,6 +102,17 @@ def _fallback_routes_from_keywords(query: str, uploaded_pdf_agents: list[str]) -
     return list(dict.fromkeys(routes))
 
 
+def _query_explicitly_targets_agent(query_lower: str, agent: str) -> bool:
+    """Detect explicit domain intent so we do not over-filter user-requested agents."""
+    explicit_keywords = {
+        "financial": ["financial", "profit", "revenue", "budget", "cash flow", "balance sheet"],
+        "sales": ["sales", "customer", "conversion", "pipeline", "order", "region"],
+        "investment": ["investment", "portfolio", "consultant", "risk", "expansion strategy"],
+        "cloud": ["cloud", "aws", "gcp", "infrastructure", "deployment", "scaling"],
+    }
+    return _query_has_any(query_lower, explicit_keywords.get(agent, []))
+
+
 def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
     token = os.getenv("GEMINI_API_KEY")
     client = genai.Client(api_key=token)
@@ -188,6 +199,31 @@ Example: financial,investment"""
     # Use deterministic keyword fallback only when LLM produced no usable routes.
     if not routes:
         routes = _fallback_routes_from_keywords(query, uploaded_pdf_agents)
+
+    # If user uploaded only specific PDF domains, avoid broad over-routing to missing domains
+    # unless user clearly asked for that domain.
+    if routes and uploaded_pdf_agents:
+        query_lower = query.lower()
+        explicit_intent_agents = {
+            agent
+            for agent in ["financial", "sales", "investment", "cloud"]
+            if _query_explicitly_targets_agent(query_lower, agent)
+        }
+
+        # CSV-backed domains can still run even without uploaded PDFs.
+        csv_available_agents = set()
+        if state.get("financial_csv") is not None:
+            csv_available_agents.add("financial")
+        if state.get("sales_csv") is not None:
+            csv_available_agents.add("sales")
+
+        allowed_agents = set(uploaded_pdf_agents) | csv_available_agents | explicit_intent_agents
+        filtered_routes = [agent for agent in routes if agent in allowed_agents]
+
+        if filtered_routes:
+            routes = filtered_routes
+        else:
+            routes = list(dict.fromkeys(uploaded_pdf_agents))
 
     # Final fallback guard if still ambiguous
     if not routes:
