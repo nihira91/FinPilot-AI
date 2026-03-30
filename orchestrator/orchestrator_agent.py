@@ -25,6 +25,83 @@ def extract_routes_from_text(text: str) -> list:
     return list(dict.fromkeys(matches))
 
 
+def _query_has_any(query_lower: str, keywords: list[str]) -> bool:
+    """Word-aware keyword matching with basic stem tolerance for safe fallback routing."""
+    for keyword in keywords:
+        escaped = re.escape(keyword.lower())
+        if re.search(rf"\b{escaped}\w*\b", query_lower):
+            return True
+    return False
+
+
+def _fallback_routes_from_keywords(query: str, uploaded_pdf_agents: list[str]) -> list[str]:
+    """Deterministic keyword fallback that avoids route conflicts and preserves prior behavior."""
+    query_lower = (query or "").lower()
+
+    # Broad-intent fanout (matches prior expected behavior for high-level review prompts)
+    broad_intent_keywords = [
+        "overall review",
+        "overall performance",
+        "company performance",
+        "business intelligence",
+        "complete report",
+        "comprehensive report",
+    ]
+    if _query_has_any(query_lower, broad_intent_keywords):
+        return ["financial", "sales", "investment"]
+
+    financial_keywords = [
+        "financial", "profit", "budget", "expense", "cost", "p&l", "quarter", "revenue",
+        "forecast", "cash", "balance", "margin", "profitability",
+    ]
+    sales_keywords = [
+        "sales", "region", "product", "season", "pattern", "trend", "anomaly",
+        "customer", "order", "conversion",
+    ]
+    investment_keywords = [
+        "investment", "portfolio", "expansion", "strategy", "risk", "consultant",
+        "opportunity", "market",
+    ]
+    cloud_keywords = [
+        "cloud", "aws", "gcp", "infrastructure", "scalable", "scale", "deployment", "saas",
+        "availability", "traffic",
+    ]
+
+    found_financial = _query_has_any(query_lower, financial_keywords)
+    found_sales = _query_has_any(query_lower, sales_keywords)
+    found_investment = _query_has_any(query_lower, investment_keywords)
+    found_cloud = _query_has_any(query_lower, cloud_keywords)
+
+    routes: list[str] = []
+
+    # Cloud-inclusive business intelligence query should include all agents.
+    if found_cloud and (found_financial or found_sales or found_investment):
+        routes = ["financial", "sales", "investment", "cloud"]
+    elif found_financial and found_investment:
+        routes = ["financial", "investment"]
+    elif found_financial and found_sales:
+        routes = ["financial", "sales"]
+    elif found_sales and found_investment:
+        routes = ["sales", "investment"]
+    elif found_sales and found_cloud:
+        routes = ["sales", "cloud"]
+    elif found_financial:
+        routes = ["financial"]
+    elif found_sales:
+        routes = ["sales"]
+    elif found_investment:
+        routes = ["investment"]
+    elif found_cloud:
+        routes = ["cloud"]
+
+    if not routes:
+        if uploaded_pdf_agents:
+            return list(dict.fromkeys(uploaded_pdf_agents))
+        return ["financial", "sales", "investment"]
+
+    return list(dict.fromkeys(routes))
+
+
 def call_gemini(prompt: str, max_tokens: int = 8192) -> str:
     token = os.getenv("GEMINI_API_KEY")
     client = genai.Client(api_key=token)
@@ -108,26 +185,11 @@ Example: financial,investment"""
         if agent not in routes:
             routes.append(agent)
 
-    # Safety keyword check
-    query_lower = query.lower()
-
-    # Use keyword fallback only when LLM produced no usable routes.
+    # Use deterministic keyword fallback only when LLM produced no usable routes.
     if not routes:
-        sales_keywords = ["sales", "revenue growth", "region", "product performance", "seasonal", "pattern", "trend", "anomal", "customer", "order", "conversion"]
-        fin_keywords   = ["financial", "profit", "budget", "expenses", "cost", "p&l", "quarterly", "revenue", "forecast", "cash", "balance", "margin"]
-        inv_keywords   = ["investment", "portfolio", "expansion", "strategy", "risk", "consultant"]
-        cloud_keywords = ["cloud", "aws", "gcp", "infrastructure", "scalab", "deployment"]
+        routes = _fallback_routes_from_keywords(query, uploaded_pdf_agents)
 
-        if any(k in query_lower for k in sales_keywords):
-            routes.append("sales")
-        if any(k in query_lower for k in inv_keywords):
-            routes.append("investment")
-        if any(k in query_lower for k in fin_keywords):
-            routes.append("financial")
-        if any(k in query_lower for k in cloud_keywords):
-            routes.append("cloud")
-        
-    # Final fallback if still ambiguous
+    # Final fallback guard if still ambiguous
     if not routes:
         if uploaded_pdf_agents:
             print(f"[Orchestrator] Ambiguous query - defaulting to uploaded PDF agents: {uploaded_pdf_agents}")
