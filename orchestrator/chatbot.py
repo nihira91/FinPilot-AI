@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types
 import pandas as pd
 import json
+import re
 
 from rag.pipeline import rag_query, format_context
 from agents.financial_agent import run as financial_run
@@ -21,6 +22,14 @@ from .orchestrator_agent import orchestrator_node as orchestrator_node_impl
 load_dotenv()
 
 MODEL_ID = "gemini-2.5-flash"
+
+
+def extract_routes_from_text(text: str) -> list:
+    """Extract valid agent names from free-form LLM text while preserving order."""
+    lowered = (text or "").lower()
+    matches = re.findall(r"\b(financial|sales|investment|cloud)\b", lowered)
+    # Deduplicate while preserving first-seen order
+    return list(dict.fromkeys(matches))
 
 
 def call_gemini(prompt: str, max_tokens: int = 4096) -> str:
@@ -38,7 +47,7 @@ def call_gemini(prompt: str, max_tokens: int = 4096) -> str:
     return response.text.strip()
 
 
-def route_query(query: str) -> list:
+def route_query(query: str, default_agents: Optional[list] = None) -> list:
     """
     Route a query to appropriate agents using orchestrator logic.
     Uses routing_rules.pdf via RAG (same as orchestrator_agent).
@@ -73,10 +82,13 @@ Examples:
 
 Your response:"""
         
-        response = call_gemini(prompt, max_tokens=100).lower().strip()
-        
-        valid = ["financial", "sales", "investment", "cloud"]
-        routes = [r.strip() for r in response.split(",") if r.strip() in valid]
+        response = call_gemini(prompt, max_tokens=100).strip()
+        routes = extract_routes_from_text(response)
+
+        # If user explicitly names domains, preserve those routes.
+        for agent in extract_routes_from_text(query):
+            if agent not in routes:
+                routes.append(agent)
         
         # Fallback to keyword matching if RAG didn't help
         if not routes:
@@ -93,19 +105,51 @@ Your response:"""
                 if any(kw in query_lower for kw in kws):
                     routes.append(agent)
             
-            routes = list(set(routes))  # Remove duplicates
+            routes = list(dict.fromkeys(routes))
         
         # Fallback if still nothing
         if not routes:
-            print("[Routing] Still ambiguous - defaulting to financial,sales")
-            routes = ["financial", "sales"]
+            if default_agents:
+                print(f"[Routing] Still ambiguous - defaulting to uploaded PDF agents: {default_agents}")
+                routes = list(dict.fromkeys(default_agents))
+            else:
+                print("[Routing] Still ambiguous - defaulting to financial,sales")
+                routes = ["financial", "sales"]
         
         print(f"[Routing] Routed to: {routes}")
         return routes
         
     except Exception as e:
+        if default_agents:
+            print(f"[Routing] Error in routing: {e}, defaulting to uploaded PDF agents: {default_agents}")
+            return list(dict.fromkeys(default_agents))
         print(f"[Routing] Error in routing: {e}, defaulting to financial,sales")
         return ["financial", "sales"]
+
+
+def get_uploaded_pdf_agents(uploaded_collections: Optional[dict] = None) -> list:
+    """Map uploaded PDF collections to agent names, preserving first-seen order."""
+    if not uploaded_collections:
+        return []
+
+    collection_to_agent = {
+        "financial_reports": "financial",
+        "sales_reports": "sales",
+        "investment_reports": "investment",
+        "cloud_docs": "cloud",
+    }
+
+    uploaded_agents = []
+    for collection_name, file_names in uploaded_collections.items():
+        agent_name = collection_to_agent.get(collection_name)
+        if not agent_name:
+            continue
+
+        has_pdf = any(str(name).lower().endswith(".pdf") for name in (file_names or []))
+        if has_pdf and agent_name not in uploaded_agents:
+            uploaded_agents.append(agent_name)
+
+    return uploaded_agents
 
 
 def auto_detect_column_mappings(
@@ -236,6 +280,7 @@ def process_chat_question(
     financial_column_mapping: Optional[dict] = None,
     sales_column_mapping: Optional[dict] = None,
     previous_agents: Optional[list] = None,
+    uploaded_collections: Optional[dict] = None,
 ) -> dict:
     """
     Process a user question and get response from appropriate agents.
@@ -262,6 +307,10 @@ def process_chat_question(
     """
     
     print(f"\n[Chatbot] Processing question: {question}")
+
+    uploaded_pdf_agents = get_uploaded_pdf_agents(uploaded_collections)
+    if uploaded_pdf_agents:
+        print(f"[Chatbot] Uploaded PDF agents available for fallback: {uploaded_pdf_agents}")
     
     # Step 0: Auto-detect column mappings if not provided
     financial_column_mapping, sales_column_mapping = auto_detect_column_mappings(
@@ -276,21 +325,30 @@ def process_chat_question(
             "sales_csv": sales_csv,
             "financial_column_mapping": financial_column_mapping,
             "sales_column_mapping": sales_column_mapping,
+            "uploaded_pdf_agents": uploaded_pdf_agents,
         }
         orch_result = orchestrator_node_impl(orch_state)
         routed_agents = orch_result.get("routes", [])
         print(f"[Chatbot] Routed by orchestrator_agent to: {routed_agents}")
     except Exception as e:
         print(f"[Chatbot] Orchestrator routing failed: {e}, falling back to local routing")
-        routed_agents = route_query(question)
+        routed_agents = route_query(question, default_agents=uploaded_pdf_agents)
+
+    # PDF-aware fallback for unexpected empty routing output.
+    if not routed_agents and uploaded_pdf_agents:
+        print(f"[Chatbot] Empty routing result - using uploaded PDF agents: {uploaded_pdf_agents}")
+        routed_agents = uploaded_pdf_agents.copy()
     
     # Step 1.5: Filter agents based on available data
-    # Financial can run with CSV or PDF RAG context, so do not drop it when CSV is missing.
-    # Sales currently requires CSV. Investment/cloud do not require CSV.
+    # Financial agent supports both CSV and RAG/PDF mode, so do NOT drop it when CSV is missing.
+    # Sales agent is CSV-centric and should still be dropped when sales CSV is unavailable.
+    # Keep non-CSV agents (investment, cloud).
     filtered_agents = []
     for a in routed_agents:
         if a == "financial":
             filtered_agents.append(a)
+            if financial_csv is None or financial_csv.empty:
+                print("[Chatbot] Keeping 'financial' route without CSV (RAG/PDF mode)")
         elif a == "sales":
             if sales_csv is not None and not sales_csv.empty:
                 filtered_agents.append(a)
@@ -301,6 +359,19 @@ def process_chat_question(
             filtered_agents.append(a)
 
     routed_agents = filtered_agents
+
+    # If filtering removed everything, prefer uploaded PDF agents still available.
+    if not routed_agents and uploaded_pdf_agents:
+        print("[Chatbot] All routed agents were filtered out - retrying with uploaded PDF agents")
+        for agent in uploaded_pdf_agents:
+            if agent == "sales":
+                if sales_csv is not None and not sales_csv.empty:
+                    routed_agents.append(agent)
+                else:
+                    print("[Chatbot] Skipping uploaded 'sales' PDF fallback - no sales CSV provided")
+            else:
+                routed_agents.append(agent)
+
     print(f"[Chatbot] After filtering by available data: {routed_agents}")
     
     # Step 1.6: Handle context-dependent requests (e.g., "create a chart for this")
@@ -359,10 +430,7 @@ def process_chat_question(
     
     # Safety check: if no responses, provide helpful message
     if not responses:
-        final_answer = (
-            "No data available for analysis. Please upload source data: "
-            "CSV for sales analysis, or readable PDFs for financial/investment/cloud analysis."
-        )
+        final_answer = "No data available for analysis. Please upload CSV files for the data you want to analyze (financial, sales, etc.)"
         agents_summary = "NO DATA"
     
     # Step 3: Synthesize final answer (optional - combine if multiple agents)

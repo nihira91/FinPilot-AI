@@ -783,6 +783,7 @@ if send_button and user_question.strip():
                 financial_column_mapping=st.session_state.get("financial_column_mapping"),
                 sales_column_mapping=st.session_state.get("sales_column_mapping"),
                 previous_agents=previous_agents,
+                uploaded_collections=st.session_state.get("uploaded_collections"),
             )
             
             # Add assistant response to history
