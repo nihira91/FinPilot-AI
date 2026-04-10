@@ -1,7 +1,4 @@
-"""
-Database configuration and models for FinPilot-AI
-Handles conversation history and user chat persistence
-"""
+
 
 from sqlalchemy import create_engine, Column, String, DateTime, Text, Integer, ForeignKey, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base

@@ -1,8 +1,8 @@
-# main.py
+
 from rag.pipeline import build_collection
 from agents.investment_strategist import run
 
-# Build index from your PDFs (skip if already built)
+
 build_collection("investment_reports")
 
 # Ask the agent a question
